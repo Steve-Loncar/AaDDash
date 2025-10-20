@@ -14,31 +14,74 @@ try:
     from streamlit_tree_select import tree_select
 except Exception:
     tree_select = None
-DEFAULT_CONFIG = {'version': '1.0.0', 'ui': {'quick_examples_count': 9, 'column_examples_count': 12}, 'theme': {'mode': 'dark', 'canvas_bg': '#0B1220', 'panel_bg': '#121A2A', 'panel_border': '#1E2A44', 'primary_text': '#E8EEF9', 'secondary_text': '#A9B7D0', 'accent': '#4DA3FF', 'accent_alt': '#7AC8FF', 'kpi_good': '#34D399', 'kpi_neutral': '#FBBF24', 'kpi_bad': '#F87171', 'rev_color': '#4DA3FF', 'ebitda_color': '#7AC8FF', 'margin_color': '#34D399'}, 'fonts': {'title_size': 24, 'section_size': 18, 'label_size': 13}, 'startup': {'default_main_category': 'Aerospace'}, 'metrics': {'revenue': {'fy23': 'Financial_Revenue_FY23', 'fy24': 'Financial_Revenue_FY24', 'fy25': 'Financial_Revenue_FY25'}, 'ebitda': {'fy23': 'Financial_EBITDA_FY23', 'fy24': 'Financial_EBITDA_FY24', 'fy25': 'Financial_EBITDA_FY25'}, 'player_revenue': {'fy25': 'Player_Revenue_FY25'}, 'player_ebitda': {'fy25': 'Player_EBITDA_FY25'}}, 'hierarchy': {'levels': ['Hierarchy - Main Category', 'Hierarchy - Sector', 'Hierarchy - Subsector', 'Hierarchy - Sub-Sub-Sector']}, 'comments_sources': {'financial_comment_col': 'Financial Data - Financial Commentary', 'financial_source_col': 'Financial Data - Financial Sources', 'player_comment_col': 'Player data - Player Commentary', 'player_source_col': 'Player data - Player Sources'}, 'player_data': {'names': ['Player data - Name', 'Player data - Name_1', 'Player data - Name_2', 'Player data - Name_3', 'Player data - Name_4'], 'countries': ['Player data - Country', 'Player data - Country_1', 'Player data - Country_2', 'Player data - Country_3', 'Player data - Country_4'], 'types': ['Player data - Type', 'Player data - Type_1', 'Player data - Type_2', 'Player data - Type_3', 'Player data - Type_4']}, 'data_sources': {'revenue': 'Company filings, Market research', 'ebitda': 'Company filings, Market research', 'ebitda_margin': 'Calculated from EBITDA/Revenue'}}
+DEFAULT_CONFIG = {'version': '1.0.0', 'ui': {'quick_examples_count': 9, 'column_examples_count': 12}, 'theme': {'mode': 'dark', 'canvas_bg': '#0B1220', 'panel_bg': '#121A2A', 'panel_border': '#1E2A44', 'primary_text': '#E8EEF9', 'secondary_text': '#A9B7D0', 'accent': '#4DA3FF', 'accent_alt': '#7AC8FF', 'kpi_good': '#34D399', 'kpi_neutral': '#FBBF24', 'kpi_bad': '#F87171', 'rev_color': '#4DA3FF', 'ebitda_color': '#7AC8FF', 'margin_color': '#34D399'}, 'fonts': {'title_size': 24, 'section_size': 18, 'label_size': 13}, 'startup': {'default_main_category': 'Aerospace'}, 'metrics': {'revenue': {'fy23': 'Financial_Revenue_FY23', 'fy24': 'Financial_ReVENUE_FY24' if False else 'Financial_Revenue_FY24', 'fy25': 'Financial_Revenue_FY25'}, 'ebitda': {'fy23': 'Financial_EBITDA_FY23', 'fy24': 'Financial_EBITDA_FY24', 'fy25': 'Financial_EBITDA_FY25'}, 'player_revenue': {'fy25': 'Player_Revenue_FY25'}, 'player_ebitda': {'fy25': 'Player_EBITDA_FY25'}}, 'hierarchy': {'levels': ['Hierarchy - Main Category', 'Hierarchy - Sector', 'Hierarchy - Subsector', 'Hierarchy - Sub-Sub-Sector']}, 'comments_sources': {'financial_comment_col': 'Financial Data - Financial Commentary', 'financial_source_col': 'Financial Data - Financial Sources', 'player_comment_col': 'Player data - Player Commentary', 'player_source_col': 'Player data - Player Sources'}, 'player_data': {'names': ['Player data - Name', 'Player data - Name_1', 'Player data - Name_2', 'Player data - Name_3', 'Player data - Name_4'], 'countries': ['Player data - Country', 'Player data - Country_1', 'Player data - Country_2', 'Player data - Country_3', 'Player data - Country_4'], 'types': ['Player data - Type', 'Player data - Type_1', 'Player data - Type_2', 'Player data - Type_3', 'Player data - Type_4']}, 'data_sources': {'revenue': 'Company filings, Market research', 'ebitda': 'Company filings, Market research', 'ebitda_margin': 'Calculated from EBITDA/Revenue'}}
 CONFIG_PATH = 'config.json'
+
+# helper to render Plotly figures without Streamlit's deprecated kwargs  
+import plotly.io as pio  
+import streamlit as st  
+from streamlit.components.v1 import html as st_html  
+  
+import plotly.io as pio
+from streamlit.components.v1 import html as st_html
+from typing import Optional
+
+def show_plotly(fig, height: Optional[int] = None, config: Optional[dict] = None):
+    """
+    Render a Plotly figure via HTML to avoid deprecated Streamlit kwargs.
+    - fig: plotly.graph_objects.Figure or plotly figure-like object
+    - height: int (px) or None
+    - config: dict passed to plotly.io.to_html
+    """
+    # default config (user-provided config overrides)
+    cfg = {"displayModeBar": False, "responsive": True}
+    if isinstance(config, dict):
+        cfg.update(config)
+
+    # try to infer height from figure layout if not provided
+    if height is None:
+        try:
+            h = getattr(fig.layout, "height", None)
+            if h is not None:
+                try:
+                    height = int(h)
+                except Exception:
+                    height = None
+        except Exception:
+            height = None
+
+    # fallback height
+    h = height or 600
+
+    # render HTML and inject
+    html_str = pio.to_html(fig, include_plotlyjs="cdn", full_html=False, config=cfg)
+    st_html(html_str, height=h, scrolling=True)
 
 def load_config() -> Dict:
     """Load user config.json and merge into DEFAULT_CONFIG safely."""
     cfg = DEFAULT_CONFIG.copy()
-    if os.path.exists(CONFIG_PATH):
-        try:
-            with open(CONFIG_PATH, 'r', encoding='utf-8') as fh:
-                user_cfg = json.load(fh)
-            if not isinstance(user_cfg, dict):
-                return cfg
+    if not os.path.exists(CONFIG_PATH):
+        return cfg
+    try:
+        with open(CONFIG_PATH, 'r', encoding='utf-8') as fh:
+            user_cfg = json.load(fh)
+        if not isinstance(user_cfg, dict):
+            return cfg
 
-            def merge(a: Dict, b: Dict):
-                for k, v in b.items():
-                    if isinstance(v, dict) and k in a and isinstance(a[k], dict):
-                        merge(a[k], v)
-                    else:
-                        a[k] = v
-                return a
-            merge(cfg, user_cfg)
-            return cfg
-        except Exception:
-            return cfg
-    return cfg
+        def merge(a: Dict, b: Dict):
+            for k, v in b.items():
+                if isinstance(v, dict) and k in a and isinstance(a[k], dict):
+                    merge(a[k], v)
+                else:
+                    a[k] = v
+            return a
+
+        merge(cfg, user_cfg)
+        return cfg
+    except Exception:
+        # If config is malformed, return defaults rather than crash
+        return cfg
+
 CFG = load_config()
 st.set_page_config(page_title='Aerospace & Defence Dashboard', layout='wide')
 
@@ -47,6 +90,7 @@ def theme_vars(cfg_theme: Dict) -> Dict[str, str]:
         return {'CANVAS_BG': '#FAFAFB', 'PANEL_BG': '#FFFF', 'PANEL_BORDER': '#E6E9EE', 'PRIMARY': '#0B1220', 'SECONDARY': '#505766', 'ACCENT': cfg_theme.get('accent', '#2563EB')}
     else:
         return {'CANVAS_BG': cfg_theme.get('canvas_bg', '#0B1220'), 'PANEL_BG': cfg_theme.get('panel_bg', '#121A2A'), 'PANEL_BORDER': cfg_theme.get('panel_border', '#1E2A44'), 'PRIMARY': cfg_theme.get('primary_text', '#E8EEF9'), 'SECONDARY': cfg_theme.get('secondary_text', '#A9B7D0'), 'ACCENT': cfg_theme.get('accent', '#4DA3FF')}
+
 TV = theme_vars(CFG['theme'])
 CANVAS_BG = TV['CANVAS_BG']
 PANEL_BG = TV['PANEL_BG']
@@ -57,12 +101,73 @@ ACCENT = TV['ACCENT']
 REV_COLOR = CFG['theme'].get('rev_color', '#4DA3FF')
 EBITDA_COLOR = CFG['theme'].get('ebitda_color', '#7AC8FF')
 MARGIN_COLOR = CFG['theme'].get('margin_color', '#34D399')
-st.markdown(f"""\n    <style>\n    .stApp {{ background-color: {CANVAS_BG}; color: {PRIMARY}; }}\n    .block-container {{ padding-top: 1rem; padding-bottom: 1rem; }}\n    .panel {{ background: {PANEL_BG}; border: 1px solid {PANEL_BORDER}; border-radius: 10px; padding: 16px 16px 8px 16px; }}\n    .section-title {{ font-size: {CFG['fonts']['section_size']}px; font-weight: 600; color: {PRIMARY}; margin-bottom: 8px; }}\n    .kpi {{ background: {PANEL_BG}; border: 1px solid {PANEL_BORDER}; border-radius: 10px; padding: 14px; }}\n    .kpi .label {{ font-size: 12px; color: {SECONDARY}; margin-bottom: 6px; }}\n    .kpi .value {{ font-size: 20px; color: {PRIMARY}; font-weight: 700; }}\n\n    /* Tabs: increase visibility */\n    div[role="tablist"] > button {{\n    border: 1px solid {ACCENT};\n    border-radius: 8px;\n    box-shadow: 0 4px 10px rgba(0,0,0,0.15);\n    padding: 8px 12px;\n    margin-right: 6px;\n    color: {PRIMARY};\n    }}\n    /* Selected tab */\n    div[role="tablist"] > button[aria-selected="true"] {{\n    background: {ACCENT};\n    color: #ffff;\n    box-shadow: 0 6px 14px rgba(0,0,0,0.25);\n    }}\n\n    /* Make plotted text not clipped */\n    .js-plotly-plot .plot-container .svg-container {{\n    overflow: visible !important;\n    }}\n\n    /* Buttons look slightly heavier for clickable examples */\n    .stButton>button {{\n    border-radius: 6px;\n    }}\n    </style>\n    """, unsafe_allow_html=True)
+
+st.markdown(f"""
+    <style>
+    .stApp {{ background-color: {CANVAS_BG}; color: {PRIMARY}; }}
+    .block-container {{ padding-top: 1rem; padding-bottom: 1rem; }}
+    .panel {{ background: {PANEL_BG}; border: 1px solid {PANEL_BORDER}; border-radius: 10px; padding: 16px 16px 8px 16px; }}
+    .section-title {{ font-size: {CFG['fonts']['section_size']}px; font-weight: 600; color: {PRIMARY}; margin-bottom: 8px; }}
+    .kpi {{ background: {PANEL_BG}; border: 1px solid {PANEL_BORDER}; border-radius: 10px; padding: 14px; }}
+    .kpi .label {{ font-size: 12px; color: {SECONDARY}; margin-bottom: 6px; }}
+    .kpi .value {{ font-size: 20px; color: {PRIMARY}; font-weight: 700; }}
+
+    /* Tabs: increase visibility */
+    div[role="tablist"] > button {{
+    border: 1px solid {ACCENT};
+    border-radius: 8px;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.15);
+    padding: 8px 12px;
+    margin-right: 6px;
+    color: {PRIMARY};
+    }}
+    /* Selected tab */
+    div[role="tablist"] > button[aria-selected="true"] {{
+    background: {ACCENT};
+    color: #ffff;
+    box-shadow: 0 6px 14px rgba(0,0,0,0.25);
+    }}
+
+    /* Make plotted text not clipped */
+    .js-plotly-plot .plot-container .svg-container {{
+    overflow: visible !important;
+    }}
+
+    /* Buttons look slightly heavier for clickable examples */
+    .stButton>button {{
+    border-radius: 6px;
+    }}
+    </style>
+    """, unsafe_allow_html=True)
+
+# ---- hide Streamlit header/menu/footer (OPTION 2) ----
+st.markdown(
+    """
+    <style>
+    /* Hide Streamlit top-left menu and header (and footer) */
+    #MainMenu { visibility: hidden !important; }
+    header { visibility: hidden !important; height: 0 !important; margin: 0 !important; padding: 0 !important; }
+    footer { visibility: hidden !important; height: 0 !important; margin: 0 !important; padding: 0 !important; }
+
+    /* keep a little top padding so content doesn't stick to browser top */
+    .block-container {
+        padding-top: 12px !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 @st.cache_data(show_spinner=False)
 def load_data_file(path: str) -> pd.DataFrame:
-    df = pd.read_excel(path)
-    df.columns = [c.strip() for c in df.columns]
+    df = pd.DataFrame()
+    if not path or not os.path.exists(path):
+        return df
+    try:
+        df = pd.read_excel(path)
+        df.columns = [c.strip() for c in df.columns]
+    except Exception:
+        df = pd.DataFrame()
     return df
 
 def get_active_df() -> pd.DataFrame:
@@ -70,6 +175,7 @@ def get_active_df() -> pd.DataFrame:
     if 'uploaded_df' not in st.session_state:
         st.session_state.uploaded_df = None
     return st.session_state.uploaded_df if st.session_state.uploaded_df is not None else globals().get('df_baseline', pd.DataFrame())
+
 LOCAL_DATA_DEFAULT = 'Aero_and_Defence_Tidy_Data_AIReady.normalized.xlsx'
 ALTERNATIVE_DATA = 'Aero_and_Defence_Tidy_Data_AIReady.xlsx'
 DEFAULT_DATA_PATH = None
@@ -81,33 +187,45 @@ try:
     df_baseline = load_data_file(DEFAULT_DATA_PATH) if DEFAULT_DATA_PATH else pd.DataFrame()
 except Exception:
     df_baseline = pd.DataFrame()
-if 'uploaded_df' not in st.session_state:
-    st.session_state.uploaded_df = None
-if 'currency_unit' not in st.session_state:
-    st.session_state.currency_unit = 'Billions'
-if 'sel_path' not in st.session_state:
-    st.session_state.sel_path = {}
-if '_rerun_trigger' not in st.session_state:
-    st.session_state._rerun_trigger = 0
-if 'rollup_mode' not in st.session_state:
-    st.session_state.rollup_mode = 'strict'
-if 'target_focus' not in st.session_state:
-    st.session_state.target_focus = None
-if 'show_inspector_hint' not in st.session_state:
-    st.session_state.show_inspector_hint = False
+
+# session defaults
+st.session_state.setdefault('uploaded_df', None)
+st.session_state.setdefault('currency_unit', 'Billions')
+st.session_state.setdefault('sel_path', {})
+st.session_state.setdefault('_rerun_trigger', 0)
+st.session_state.setdefault('rollup_mode', 'strict')
+st.session_state.setdefault('target_focus', None)
+st.session_state.setdefault('show_inspector_hint', False)
+
 HIER_LEVELS: List[str] = CFG['hierarchy']['levels']
 QUICK_EXAMPLES_COUNT = int(CFG.get('ui', {}).get('quick_examples_count', 9))
 COLUMN_EXAMPLES_COUNT = int(CFG.get('ui', {}).get('column_examples_count', 12))
 BASE_COLORS = {'aerospace': '#1f77b4', 'aero': '#1f77b4', 'defence': '#2ca02c', 'defense': '#2ca02c'}
 
 def hex_to_rgb(hex_color: str) -> Tuple[float, float, float]:
-    h = (hex_color or '').lstrip('#')
+    if not hex_color:
+        hex_color = '888888'
+    h = (hex_color or '').lstrip('#').strip()
+    if len(h) == 3:
+        h = ''.join([c*2 for c in h])
     if len(h) != 6:
         h = '888888'
-    return tuple((int(h[i:i + 2], 16) / 255.0 for i in (0, 2, 4)))
+    try:
+        r = int(h[0:2], 16) / 255.0
+        g = int(h[2:4], 16) / 255.0
+        b = int(h[4:6], 16) / 255.0
+        return (r, g, b)
+    except Exception:
+        return (136/255.0, 136/255.0, 136/255.0)
 
 def rgb_to_hex(rgb: Tuple[float, float, float]) -> str:
-    return '#{:02x}{:02x}{:02x}'.format(int(max(0, min(1, rgb[0])) * 255), int(max(0, min(1, rgb[1])) * 255), int(max(0, min(1, rgb[2])) * 255))
+    try:
+        r = int(max(0, min(1, rgb[0])) * 255)
+        g = int(max(0, min(1, rgb[1])) * 255)
+        b = int(max(0, min(1, rgb[2])) * 255)
+        return '#{:02x}{:02x}{:02x}'.format(r, g, b)
+    except Exception:
+        return '#888888'
 
 def generate_shades(base_hex: str, n: int, light_min: float=0.35, light_max: float=0.85) -> List[str]:
     """Return n hex shades derived from base_hex by varying lightness (HLS)."""
@@ -132,13 +250,6 @@ def get_base_color_for_top(val: str) -> str:
     return BASE_COLORS.get(key, None) or BASE_COLORS.get('aero')
 
 def build_horizontal_color_map(df: pd.DataFrame, parent_col: str, child_col: str, top_level_values: Optional[List[str]]=None) -> Dict[Tuple[str, str], str]:
-    """
-    Build a mapping (parent_value, child_value) -> hex color, where
-    shades for the children are derived from the parent's base color.
-    If the parent name is not a known top-level key, attempt to find the
-    top-level ancestor in the dataframe and derive shades from that top.
-    Preserve family order (first appearance) for parents and children.
-    """
     color_map: Dict[Tuple[str, str], str] = {}
     if parent_col not in df.columns or child_col not in df.columns:
         return color_map
@@ -172,7 +283,6 @@ def build_horizontal_color_map(df: pd.DataFrame, parent_col: str, child_col: str
     return color_map
 
 def build_top_level_color_map(df: pd.DataFrame, top_col: str) -> Dict[str, str]:
-    """Return mapping top_value -> hex color. Use BASE_COLORS where possible; fallback to palette."""
     col_map: Dict[str, str] = {}
     if top_col not in df.columns:
         return col_map
@@ -188,13 +298,11 @@ def build_top_level_color_map(df: pd.DataFrame, top_col: str) -> Dict[str, str]:
     return col_map
 
 def get_contrast_text(hex_color: str) -> str:
-    """Return '#000000' or '#ffffff' depending on perceived luminance for readable text."""
     r, g, b = hex_to_rgb(hex_color)
     lum = 0.299 * r + 0.587 * g + 0.114 * b
-    return '#000000' if lum > 0.6 else '#ffffff'
+    return '#000' if lum > 0.6 else '#fff'
 
 def get_unique_in_family_order(series: pd.Series) -> List[str]:
-    """Return unique values in order of first appearance (family order)."""
     out = []
     seen = set()
     try:
@@ -324,13 +432,15 @@ def df_to_excel_bytes(df: pd.DataFrame) -> bytes:
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df.to_excel(writer, index=False, sheet_name='sheet1')
     return output.getvalue()
+
 tabs = st.tabs(['Home', 'Main Dashboard', 'Players', 'Comments & Sources', 'Taxonomy Explorer', 'Heatmap'])
 tab_home, tab_main, tab_players, tab_comments, tab_taxonomy, tab_heatmap = tabs
+
 with tab_home:
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown(f"<h2 style='color:{PRIMARY}; margin-bottom:0.25rem;'>Home</h2>", unsafe_allow_html=True)
     st.markdown('### What this tool is')
-    st.write('Hello World! This dashboard lets you explore the Aerospace & Defence taxonomy and associated KPIs. Use the tabs to navigate (Main Dashboard, Players, Inspector, Taxonomy Explorer).')
+    st.write('This dashboard lets you explore the Aerospace & Defence taxonomy and associated KPIs. Use the tabs to navigate (Main Dashboard, Players, Inspector, Taxonomy Explorer).')
     df_active = get_active_df()
     st.markdown('### Dataset summary')
     if df_active is None or df_active.empty:
@@ -347,7 +457,6 @@ with tab_home:
             st.write('_Dataset summary failed to compute._')
     st.markdown('### Data available')
     hierarchy_cols = ['Hierarchy - Main Category', 'Hierarchy - Sector', 'Hierarchy - Subsector', 'Hierarchy - Sub-Sub-Sector']
-    hierarchy_cols = ['Hierarchy - Main Category', 'Hierarchy - Sector', 'Hierarchy - Subsector', 'Hierarchy - Sub-Sub-Sector']
     tops = get_unique_in_family_order(df_active[hierarchy_cols[0]]) if hierarchy_cols[0] in df_active.columns else []
     row_index = 0
     top_color_map = build_top_level_color_map(df_active, hierarchy_cols[0]) if not df_active.empty and hierarchy_cols[0] in df_active.columns else {}
@@ -360,7 +469,7 @@ with tab_home:
         if not top:
             continue
         df_top = df_active[df_active[hierarchy_cols[0]].astype(str).str.strip().str.lower() == str(top).strip().lower()]
-        top_color = top_color_map.get(top, '#8888')
+        top_color = top_color_map.get(top, '#888888')
         sectors = get_unique_in_family_order(df_top[hierarchy_cols[1]]) if len(hierarchy_cols) > 1 and hierarchy_cols[1] in df_top.columns else ['']
         if not sectors:
             sectors = ['']
@@ -383,7 +492,7 @@ with tab_home:
                     display_sector = sector if prev_sector != sector or display_top else ''
                     display_subsector = subsector if prev_subsector != subsector or display_sector else ''
                     for i, node in enumerate(nodes):
-                        color = '#8888'
+                        color = '#888888'
                         if i == 0:
                             color = top_color
                         elif i == 1:
@@ -392,7 +501,7 @@ with tab_home:
                             color = subsector_color
                         elif len(hierarchy_cols) > 3:
                             parent = nodes[i - 1]
-                            color = cmap_23.get((parent, node), '#8888')
+                            color = cmap_23.get((parent, node), '#888888')
                         with cols[i]:
                             if i == 0:
                                 disp = display_top
@@ -418,7 +527,8 @@ with tab_home:
                     prev_sector = sector
                     prev_subsector = subsector
                     row_index += 1
-        st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
 with tab_main:
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown('<div class="section-title">Financial Overview</div>', unsafe_allow_html=True)
@@ -446,6 +556,7 @@ with tab_main:
         l4 = st.selectbox(HIER_LEVELS[3], l4_vals, index=0, key=f'{key_prefix}l4')
         path[HIER_LEVELS[3]] = l4
         return path
+
     st.session_state.sel_path = build_tree_ui(df_active)
     breadcrumb_parts = []
     for lvl in HIER_LEVELS:
@@ -496,11 +607,14 @@ with tab_main:
         kpi_card('Player EBITDA Margin FY25', player_mgn.get('fy25'), '%', color=CFG['theme']['kpi_good'])
     c1, c2, c3 = st.columns([1, 1, 1])
     with c1:
-        st.plotly_chart(plot_bars_with_labels('Revenue', {'fy23': rev.get('fy23'), 'fy24': rev.get('fy24'), 'fy25': rev.get('fy25')}, REV_COLOR, is_percent=False, source=CFG['data_sources']['revenue']), width='stretch', config={'displayModeBar': False, 'responsive': True})
+        fig1 = plot_bars_with_labels('Revenue', {'fy23': rev.get('fy23'), 'fy24': rev.get('fy24'), 'fy25': rev.get('fy25')}, REV_COLOR, is_percent=False, source=CFG['data_sources']['revenue'])
+        show_plotly(fig1)
     with c2:
-        st.plotly_chart(plot_bars_with_labels('EBITDA', {'fy23': ebt.get('fy23'), 'fy24': ebt.get('fy24'), 'fy25': ebt.get('fy25')}, EBITDA_COLOR, is_percent=False, source=CFG['data_sources']['ebitda']), width='stretch', config={'displayModeBar': False, 'responsive': True})
+        fig2 = plot_bars_with_labels('EBITDA', {'fy23': ebt.get('fy23'), 'fy24': ebt.get('fy24'), 'fy25': ebt.get('fy25')}, EBITDA_COLOR, is_percent=False, source=CFG['data_sources']['ebitda'])
+        show_plotly(fig2)
     with c3:
-        st.plotly_chart(plot_bars_with_labels('EBITDA Margin', {'fy23': mgn.get('fy23'), 'fy24': mgn.get('fy24'), 'fy25': mgn.get('fy25')}, MARGIN_COLOR, is_percent=True, source=CFG['data_sources']['ebitda_margin']), width='stretch', config={'displayModeBar': False, 'responsive': True})
+        fig3 = plot_bars_with_labels('EBITDA Margin', {'fy23': mgn.get('fy23'), 'fy24': mgn.get('fy24'), 'fy25': mgn.get('fy25')}, MARGIN_COLOR, is_percent=True, source=CFG['data_sources']['ebitda_margin'])
+        show_plotly(fig3)
     st.markdown('### Export current slice')
     try:
         if len(df_node) > 0:
@@ -549,6 +663,7 @@ with tab_main:
             if lvl in path and path[lvl] != 'All':
                 return lvl
         return None
+
     deepest_level = get_deepest_selected_level(current_path, levels)
     if deepest_level is None:
         next_level = levels[0]
@@ -595,6 +710,7 @@ with tab_main:
     if all((v is None for v in [rev.get('fy23'), rev.get('fy24'), rev.get('fy25')])):
         st.info("No metrics found for current selection. To view top-level totals, set deeper levels to 'All'.")
     st.markdown('</div>', unsafe_allow_html=True)
+
 with tab_players:
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown('<div class="section-title">Players</div>', unsafe_allow_html=True)
@@ -635,6 +751,7 @@ with tab_players:
             if vals.empty:
                 return None
             return float(vals.sum())
+
         metrics_rows = []
         player_revenue_label = CFG['metrics'].get('player_revenue', {}).get('fy25')
         player_ebitda_label = CFG['metrics'].get('player_ebitda', {}).get('fy25')
@@ -653,7 +770,7 @@ with tab_players:
             fig_rev = px.bar(df_rev_plot, x='Revenue_FY25_display', y=df_rev_plot.index, orientation='h', labels={'Revenue_FY25_display': f'Revenue FY25 ({st.session_state.currency_unit})', 'index': 'Player'}, color_discrete_sequence=[REV_COLOR])
             fig_rev.update_layout(paper_bgcolor=CANVAS_BG, plot_bgcolor=PANEL_BG, font_color=PRIMARY, margin=dict(l=140, r=10, t=40, b=40), height=420)
             st.markdown('#### Revenue FY25 (top players)')
-            st.plotly_chart(fig_rev, width='stretch', config={'displayModeBar': False, 'responsive': True})
+            show_plotly(fig_rev)
         else:
             st.info('No Player Revenue FY25 values found for charting.')
         if df_player_metrics['EBITDA_FY25_display'].dropna().any():
@@ -661,7 +778,7 @@ with tab_players:
             fig_ebt = px.bar(df_ebt_plot, x='EBITDA_FY25_display', y=df_ebt_plot.index, orientation='h', labels={'EBITDA_FY25_display': f'EBITDA FY25 ({st.session_state.currency_unit})', 'index': 'Player'}, color_discrete_sequence=[EBITDA_COLOR])
             fig_ebt.update_layout(paper_bgcolor=CANVAS_BG, plot_bgcolor=PANEL_BG, font_color=PRIMARY, margin=dict(l=140, r=10, t=40, b=40), height=420)
             st.markdown('#### EBITDA FY25 (top players)')
-            st.plotly_chart(fig_ebt, width='stretch', config={'displayModeBar': False, 'responsive': True})
+            show_plotly(fig_ebt)
         else:
             st.info('No Player EBITDA FY25 values found for charting.')
         if df_player_metrics['EBITDA_Margin_FY25'].dropna().any():
@@ -669,7 +786,7 @@ with tab_players:
             fig_mgn = px.bar(df_mgn_plot, x='EBITDA_Margin_FY25', y=df_mgn_plot.index, orientation='h', labels={'EBITDA_Margin_FY25': 'EBITDA Margin FY25 (%)', 'index': 'Player'}, color_discrete_sequence=[MARGIN_COLOR])
             fig_mgn.update_layout(paper_bgcolor=CANVAS_BG, plot_bgcolor=PANEL_BG, font_color=PRIMARY, margin=dict(l=140, r=10, t=40, b=40), height=420)
             st.markdown('#### EBITDA Margin FY25 (top players)')
-            st.plotly_chart(fig_mgn, width='stretch', config={'displayModeBar': False, 'responsive': True})
+            show_plotly(fig_mgn)
         else:
             st.info('No Player EBITDA Margin FY25 values found for charting.')
         df_players_display = df_players.set_index('Name').join(df_player_metrics[['Revenue_FY25_display', 'EBITDA_FY25_display', 'EBITDA_Margin_FY25']], how='left').reset_index()
@@ -680,6 +797,7 @@ with tab_players:
     else:
         st.info('No players found for current selection.')
     st.markdown('</div>', unsafe_allow_html=True)
+
 with tab_comments:
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown('<div class="section-title">Comments & Sources</div>', unsafe_allow_html=True)
@@ -702,6 +820,7 @@ with tab_comments:
     else:
         st.markdown('_No financial sources available for this slice._')
     st.markdown('</div>', unsafe_allow_html=True)
+
 with tab_taxonomy:
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown('<div class="section-title">Taxonomy Explorer</div>', unsafe_allow_html=True)
@@ -723,6 +842,7 @@ with tab_taxonomy:
                 nodes.append({'label': val, 'value': '|||'.join(path), 'children': children})
             return nodes
         return recurse(df_copy, 0, [])
+
     df_active = get_active_df()
     if df_active.empty:
         st.info('No data available to build taxonomy. Upload a dataset in Settings or load the baseline file.')
@@ -755,6 +875,7 @@ with tab_taxonomy:
                 except Exception as err:
                     st.error('Taxonomy tree widget failed to load: ' + str(err))
                     return None
+
         selected = safe_tree_select(tree_data, key='taxonomy_tree', height=520, multi=False)
         sel_value = None
         if selected:
@@ -772,6 +893,7 @@ with tab_taxonomy:
                 else:
                     st.session_state.sel_path[lvl] = 'All'
             st.session_state._rerun_trigger = st.session_state.get('_rerun_trigger', 0) + 1
+
         if tree_select is None:
             try:
                 top_color_map = build_top_level_color_map(df_active, CFG['hierarchy']['levels'][0]) if not df_active.empty else {}
@@ -837,9 +959,10 @@ with tab_taxonomy:
                     df_tax_unique = df_tax[CFG['hierarchy']['levels']].drop_duplicates()
                     fig = px.treemap(df_tax_unique, path=CFG['hierarchy']['levels'], color=CFG['hierarchy']['levels'][0], color_discrete_sequence=px.colors.qualitative.Pastel, title='Aerospace & Defence Taxonomy (Treemap fallback)')
                     fig.update_layout(margin=dict(t=40, l=0, r=0, b=0), paper_bgcolor=CANVAS_BG, plot_bgcolor=CANVAS_BG, font_color=PRIMARY)
-                    st.plotly_chart(fig, width='stretch', config={'displayModeBar': False, 'responsive': True})
+                    show_plotly(fig)
             except Exception as e:
                 st.info('Could not build taxonomy visualization: ' + str(e))
+
 with tab_heatmap:
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown('<div class="section-title">Taxonomy × Metrics Heatmap</div>', unsafe_allow_html=True)
@@ -867,6 +990,7 @@ with tab_heatmap:
                 seen.add(path)
                 out.append(path)
         return out
+
     node_paths = build_node_paths(df_active, levels)
     if not node_paths:
         st.info('No taxonomy nodes available (dataset empty or hierarchy columns missing).')
@@ -928,50 +1052,50 @@ with tab_heatmap:
                             checks[p] = st.checkbox(p, key=f'hm_chk_{i}', value=False)
                     selected_nodes = [p for p, v in checks.items() if v]
                 submitted = st.form_submit_button('Generate heatmap')
-                if submitted:
-                    if not selected_nodes:
-                        st.warning('No taxonomy rows selected — the heatmap will be empty. Select at least one row.')
-                    else:
-                        MET = CFG.get('metrics', {})
+            if submitted:
+                if not selected_nodes:
+                    st.warning('No taxonomy rows selected — the heatmap will be empty. Select at least one row.')
+                else:
+                    MET = CFG.get('metrics', {})
 
-                        def subset_for_path(df: pd.DataFrame, path_str: str, levels: List[str]) -> pd.DataFrame:
-                            parts = [p.strip() for p in path_str.split(' / ') if p.strip() != '']
-                            if not parts:
+                    def subset_for_path(df: pd.DataFrame, path_str: str, levels: List[str]) -> pd.DataFrame:
+                        parts = [p.strip() for p in path_str.split(' / ') if p.strip() != '']
+                        if not parts:
+                            return pd.DataFrame()
+                        mask = pd.Series([True] * len(df), index=df.index)
+                        for i, p in enumerate(parts):
+                            lvl = levels[i]
+                            if lvl in df.columns:
+                                mask = mask & (df[lvl].astype(str).str.strip().str.lower() == str(p).strip().lower())
+                            else:
                                 return pd.DataFrame()
-                            mask = pd.Series([True] * len(df), index=df.index)
-                            for i, p in enumerate(parts):
-                                lvl = levels[i]
-                                if lvl in df.columns:
-                                    mask = mask & (df[lvl].astype(str).str.strip().str.lower() == str(p).strip().lower())
-                                else:
-                                    return pd.DataFrame()
-                            return df[mask]
-                        rows = []
-                        for node in selected_nodes:
-                            df_node = subset_for_path(df_active, node, levels)
-                            row = {'__node': node}
-                            rev_map = MET.get('revenue', {})
-                            ebt_map = MET.get('ebitda', {})
-                            rev_vals = get_metric_values(df_node, rev_map) if rev_map else {'fy23': None, 'fy24': None, 'fy25': None}
-                            ebt_vals = get_metric_values(df_node, ebt_map) if ebt_map else {'fy23': None, 'fy24': None, 'fy25': None}
-                            for fy in ('fy23', 'fy24', 'fy25'):
-                                row[f'Revenue {fy.upper()}'] = rev_vals.get(fy)
-                                row[f'EBITDA {fy.upper()}'] = ebt_vals.get(fy)
-                                rv = rev_vals.get(fy)
-                                eb = ebt_vals.get(fy)
-                                row[f'EBITDA Margin {fy.upper()}'] = calculate_ebitda_margin(rv, eb) if rv is not None and eb is not None else None
-                            rows.append(row)
-                        df_heat_raw = pd.DataFrame(rows).set_index('__node')
-                        final_cols = []
-                        for label, key in metric_cols:
-                            if key[0] == 'revenue':
-                                final_cols.append(f'Revenue {key[1].upper()}')
-                            elif key[0] == 'ebitda':
-                                final_cols.append(f'EBITDA {key[1].upper()}')
-                            elif key[0] == 'margin':
-                                final_cols.append(f'EBITDA Margin {key[1].upper()}')
-                        df_final = df_heat_raw.reindex(columns=final_cols)
-                        result_holder['df_final'] = df_final
+                        return df[mask]
+                    rows = []
+                    for node in selected_nodes:
+                        df_node = subset_for_path(df_active, node, levels)
+                        row = {'__node': node}
+                        rev_map = MET.get('revenue', {})
+                        ebt_map = MET.get('ebitda', {})
+                        rev_vals = get_metric_values(df_node, rev_map) if rev_map else {'fy23': None, 'fy24': None, 'fy25': None}
+                        ebt_vals = get_metric_values(df_node, ebt_map) if ebt_map else {'fy23': None, 'fy24': None, 'fy25': None}
+                        for fy in ('fy23', 'fy24', 'fy25'):
+                            row[f'Revenue {fy.upper()}'] = rev_vals.get(fy)
+                            row[f'EBITDA {fy.upper()}'] = ebt_vals.get(fy)
+                            rv = rev_vals.get(fy)
+                            eb = ebt_vals.get(fy)
+                            row[f'EBITDA Margin {fy.upper()}'] = calculate_ebitda_margin(rv, eb) if rv is not None and eb is not None else None
+                        rows.append(row)
+                    df_heat_raw = pd.DataFrame(rows).set_index('__node')
+                    final_cols = []
+                    for label, key in metric_cols:
+                        if key[0] == 'revenue':
+                            final_cols.append(f'Revenue {key[1].upper()}')
+                        elif key[0] == 'ebitda':
+                            final_cols.append(f'EBITDA {key[1].upper()}')
+                        elif key[0] == 'margin':
+                            final_cols.append(f'EBITDA Margin {key[1].upper()}')
+                    df_final = df_heat_raw.reindex(columns=final_cols)
+                    result_holder['df_final'] = df_final
             if result_holder.get('df_final') is not None:
                 df_final = result_holder['df_final']
                 if df_final.isna().all(axis=None):
@@ -1017,14 +1141,15 @@ with tab_heatmap:
                     for a in text_annotations:
                         fig.add_annotation(a)
                     st.markdown('#### Heatmap (column-normalised shading)')
-                    st.plotly_chart(fig, width='stretch', config={'displayModeBar': False, 'responsive': True})
+                    show_plotly(fig)
                     csv_bytes = df_final.reset_index().to_csv(index=False).encode('utf-8')
                     st.download_button('Download heatmap table (CSV)', csv_bytes, file_name='heatmap_table.csv', mime='text/csv')
                     st.markdown('**Notes:**\n- Colors are normalised per column (min→light, max→dark) so shading shows relative strength within each metric column.\n- Empty cells indicate missing data for that node/metric.\n- Values shown on cells are the raw aggregated values (formatted).')
-            st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
 def main():
     pass
+
 if __name__ == '__main__':
     main()
