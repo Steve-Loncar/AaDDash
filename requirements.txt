@@ -2,6 +2,7 @@ streamlit>=1.18.0
 pandas>=1.5  
 plotly>=5.10  
 openpyxl>=3.0  
-pyvis>=0.4
+streamlit-tree-select==0.0.5
+
 
 
