@@ -2225,3 +2225,195 @@ def main():
 if __name__ == '__main__':
     main()
 
+
+# -----------------------------
+# Heatmap - all (appended helpers + tab UI)
+# -----------------------------
+import numpy as _np
+import pandas as _pd
+import plotly.graph_objects as _go
+import streamlit as _st
+
+def _collect_hierarchy_cols(df):
+    """
+    Robustly collect hierarchy columns from the dataframe in their existing order.
+    It looks for columns that start with 'Hierarchy -' and returns them as a list.
+    """
+    return [c for c in df.columns if c.startswith("Hierarchy -")]
+
+def build_node_metric_map(df, metric_name, value_col="Value"):
+    """
+    Build a mapping from hierarchy-path (string) to numeric metric value for metric_name.
+    - df: input DataFrame (tidy format).
+    - metric_name: string to match against 'Fiscal Metric Flattened' (case-insensitive substring).
+    - value_col: name of the numeric value column (defaults to 'Value').
+    Returns: dict { path_str -> aggregated_value }, and the ordered list of hierarchy columns.
+    """
+    hierarchy_cols = _collect_hierarchy_cols(df)
+    if "Fiscal Metric Flattened" not in df.columns:
+        raise KeyError("Expected column 'Fiscal Metric Flattened' in dataframe")
+
+    # Filter rows that correspond to the metric
+    mask = df["Fiscal Metric Flattened"].astype(str).str.contains(str(metric_name), case=False, na=False)
+    df_metric = df.loc[mask].copy()
+    if df_metric.empty:
+        return {}, hierarchy_cols
+
+    # Ensure numeric
+    df_metric[value_col] = _pd.to_numeric(df_metric[value_col], errors="coerce")
+
+    # Build one row per node-level: for each row and for each hierarchy level create node_path -> value
+    records = []
+    for _, row in df_metric.iterrows():
+        path_parts = []
+        for hc in hierarchy_cols:
+            val = row.get(hc)
+            if pd_is_valid := (val is not None and str(val).strip() != "" and str(val).lower() not in ["nan", "none"]):
+                path_parts.append(str(val).strip())
+            else:
+                # keep placeholder so levels align; when a level is missing we break (no deeper ancestors)
+                break
+            node_path = " / ".join(path_parts)
+            records.append({"node_path": node_path, "value": row[value_col]})
+
+    nodes_df = _pd.DataFrame.from_records(records)
+    if nodes_df.empty:
+        return {}, hierarchy_cols
+
+    # Aggregate duplicates (multiple player rows map to same node) - use mean, drop NaNs
+    agg = nodes_df.dropna(subset=["value"]).groupby("node_path", as_index=False).value.mean()
+    metric_map = dict(zip(agg.node_path, agg.value))
+    return metric_map, hierarchy_cols
+
+def build_heatmap_matrix_from_paths(df, metric_name="EBITDA margin 2025", value_col="Value"):
+    """
+    Build a matrix where:
+      - rows = unique full paths (deepest path per data row)
+      - columns = hierarchy levels (left to right: root -> deepest level)
+      - entry [i,j] = metric value for the ancestor at level j of the row i path
+    Returns:
+      - matrix: 2D numpy array (rows x cols) with float values (np.nan where missing)
+      - row_labels: list of full-path strings (rows)
+      - col_labels: list of level names (the actual hierarchy column names)
+    """
+    metric_map, hierarchy_cols = build_node_metric_map(df, metric_name, value_col=value_col)
+
+    # Build full-path (leaf) labels from the entire dataframe rows (use non-empty names)
+    hcols = hierarchy_cols
+    if not hcols:
+        return _np.empty((0,0)), [], []
+
+    def get_full_path(row):
+        parts = []
+        for hc in hcols:
+            v = row.get(hc)
+            if v is None or str(v).strip().lower() in ["", "nan", "none"]:
+                break
+            parts.append(str(v).strip())
+        return " / ".join(parts)
+
+    full_paths = df.apply(get_full_path, axis=1)
+    full_paths = [_p for _p in full_paths.unique() if _p != ""]
+    if not full_paths:
+        return _np.empty((0, len(hcols))), [], hcols
+
+    rows = []
+    for path in full_paths:
+        parts = path.split(" / ")
+        row_vals = []
+        for level_idx in range(len(hcols)):
+            if level_idx < len(parts):
+                ancestor_path = " / ".join(parts[: level_idx + 1])
+                row_vals.append(metric_map.get(ancestor_path, _np.nan))
+            else:
+                row_vals.append(_np.nan)
+        rows.append(row_vals)
+
+    matrix = _np.array(rows, dtype=float)
+    return matrix, full_paths, hcols
+
+def render_heatmap_figure(matrix, row_labels, col_labels, metric_name="Metric", colorscale="RdYlGn"):
+    """
+    Render a Plotly Heatmap with column labels (levels) and row labels (full paths).
+    Normalization (zmin/zmax) is set to the global min/max across the matrix so the shading
+    is consistent across all columns/levels (as requested).
+    """
+    if matrix.size == 0:
+        fig = _go.Figure()
+        fig.update_layout(title="No data available for selected metric")
+        return fig
+
+    z = matrix
+    # compute global min/max ignoring NaNs
+    finite = _np.isfinite(z)
+    if finite.any():
+        zmin = float(_np.nanmin(_np.where(finite, z, _np.nan)))
+        zmax = float(_np.nanmax(_np.where(finite, z, _np.nan)))
+    else:
+        zmin, zmax = 0.0, 1.0
+
+    hover_text = []
+    for r_idx, rlabel in enumerate(row_labels):
+        row_hover = []
+        for c_idx, clabel in enumerate(col_labels):
+            val = z[r_idx, c_idx]
+            if _np.isfinite(val):
+                txt = f"{rlabel} — {clabel}: {val:,.2f}"
+            else:
+                txt = f"{rlabel} — {clabel}: n/a"
+            row_hover.append(txt)
+        hover_text.append(row_hover)
+
+    fig = _go.Figure(
+        data=_go.Heatmap(
+            z=z,
+            x=col_labels,
+            y=row_labels,
+            hoverinfo="text",
+            text=hover_text,
+            colorscale=colorscale,
+            zmin=zmin,
+            zmax=zmax,
+            colorbar=dict(title=metric_name),
+        )
+    )
+    fig.update_layout(
+        autosize=True,
+        yaxis=dict(autorange="reversed"),  # keeps the first path at the top
+        margin=dict(l=200, r=40, t=60, b=80),
+        title=f"Heatmap - all (metric: {metric_name})",
+    )
+    return fig
+
+def heatmap_all_tab_ui(df, default_metric="EBITDA margin 2025", value_col="Value"):
+    """
+    Streamlit UI snippet: call this from where your app builds tabs.
+    Example:
+      tabs = st.tabs(['Home','Dashboard','Heatmap','Heatmap - all'])
+      with tabs[3]:
+          heatmap_all_tab_ui(df)
+    """
+    st = _st
+    st.header("Heatmap - all")
+    metric = st.selectbox("Determining factor (metric)", options=[default_metric], index=0, help="Choose metric used to color the heatmap. You can add more metrics to the selectbox if desired.")
+
+    with st.spinner("Building matrix..."):
+        matrix, row_labels, col_labels = build_heatmap_matrix_from_paths(df, metric_name=metric, value_col=value_col)
+
+    if matrix.size == 0:
+        st.warning("No data available for the chosen metric. Check 'Fiscal Metric Flattened' and 'Value' columns.")
+        return
+
+    # Allow the user to control color scale and clustering / ordering later if desired
+    colorscale = st.selectbox("Color scale", options=["RdYlGn", "Viridis", "Blues", "RdBu"], index=0)
+
+    # Render
+    fig = render_heatmap_figure(matrix, row_labels, col_labels, metric_name=metric, colorscale=colorscale)
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Optional: provide download of matrix as CSV
+    if st.download_button("Download matrix CSV", data=_pd.DataFrame(matrix, index=row_labels, columns=col_labels).to_csv(index=True), file_name="heatmap_all_matrix.csv"):
+        st.success("CSV prepared")
+
+# End of appended Heatmap - all helpers + UI snippet
+
