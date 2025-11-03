@@ -1248,7 +1248,7 @@ with tab_dashboard:
     st.markdown('<div class="section-title">Financial Overview</div>', unsafe_allow_html=True)
     df_active = get_active_df()
 
-    # Left navigation builder (kept as function for clarity)
+    # Left navigation builder (single-call tree_select + normalized session-state)
     def build_left_nav(df: pd.DataFrame, key_prefix: str = '') -> Dict[str, str]:
         st.markdown('<div class="section-title">Navigation</div>', unsafe_allow_html=True)
 
@@ -1305,6 +1305,7 @@ with tab_dashboard:
         selected_value = None
         default_top = CFG.get('startup', {}).get('default_main_category', 'Aerospace')
 
+        # Derive a current single-checked value from sel_path if present
         current_checked_value = None
         try:
             sp = st.session_state.get('sel_path', {})
@@ -1323,6 +1324,7 @@ with tab_dashboard:
 
         st.session_state.setdefault('_last_nav_checked', [])
 
+        # If tree_select isn't available, fall back to a single-level selectbox for the top level
         if tree_select is None:
             top_col = HIER_LEVELS[0] if len(HIER_LEVELS) > 0 else None
             top_vals: List[str] = []
@@ -1344,6 +1346,7 @@ with tab_dashboard:
         pre_check = current_checked_value or default_top
         comp_key = f'{key_prefix}taxonomy_tree'
 
+        # Single-call tree_select: call once, infer last-click, normalize session state, and set sel_path.
         try:
             sig = inspect.signature(tree_select)
             params = sig.parameters
@@ -1358,23 +1361,12 @@ with tab_dashboard:
             if 'no_cascade' in params:
                 call_kwargs['no_cascade'] = True
 
-            pre_check = current_checked_value or default_top
-            expanded_ancestors = []
-            try:
-                if pre_check:
-                    parts = str(pre_check).split('|||')
-                    for i in range(1, len(parts)):
-                        ancestor = '|||'.join(parts[:i])
-                        if ancestor:
-                            expanded_ancestors.append(ancestor)
-            except Exception:
-                expanded_ancestors = []
-
-            # For single selection behavior, only use the last checked item
+            # Choose a single starting check: prefer last persisted, else pre_check
             last_checked = st.session_state.get('_last_nav_checked', [])
             single_check = last_checked[-1] if last_checked else pre_check
 
-            single_props = ('value', 'default', 'defaultValue', 'selected', 'initial_value')
+            # Provide both single-style and list-style props where supported
+            single_props = ('value', 'default', 'defaultValue', 'selected', 'initial_value', 'initial')
             list_props = ('checked', 'values', 'checked_values', 'initial_values', 'initial_value_list')
             for p in single_props:
                 if p in params:
@@ -1384,98 +1376,55 @@ with tab_dashboard:
                     call_kwargs[p] = [single_check] if single_check else []
             if 'checked' in params and 'checked' not in call_kwargs:
                 call_kwargs['checked'] = [single_check] if single_check else []
-            if 'expanded' in params and expanded_ancestors:
-                call_kwargs['expanded'] = expanded_ancestors
 
-            # First, call the widget normally and inspect the returned value.
+            # Call the widget ONCE
             selected_raw = tree_select(tree_data, **call_kwargs)
             sel_list = _to_sel_list(selected_raw)
-
-            # Normalize previous state variables
             prev_list = st.session_state.get('_last_nav_checked', []) or []
 
-            # Try to infer the last-clicked item (added wins, fallback to last in returned list)
-            added = [s for s in sel_list if s not in set(prev_list)]
+            # Infer last-clicked: new additions to the returned list win, otherwise fall back to last item
             last_clicked = None
-            if added:
-                last_clicked = added[-1]
-            elif sel_list:
-                last_clicked = sel_list[-1]
-            elif prev_list:
-                last_clicked = prev_list[-1]
-
-            # If widget returned >1 checked item (sticky behaviour), immediately force a controlled re-render
-            # with only the single inferred selection. Use a small reset counter to produce a unique key so the
-            # underlying component instance is recreated and its internal checked state is replaced.
             try:
-                if len(sel_list) > 1:
-                    single_force = last_clicked or (sel_list[-1] if sel_list else pre_check)
-                    # persist a single checked entry
-                    st.session_state._last_nav_checked = [single_force] if single_force else []
-                    # bump reset counter so we can generate a unique component key
-                    st.session_state['_nav_force_reset'] = st.session_state.get('_nav_force_reset', 0) + 1
-                    force_key = comp_key + f"_reset_{st.session_state['_nav_force_reset']}"
-
-                    # Build force_kwargs: ensure we set both single-style and list-style props where supported.
-                    force_kwargs = call_kwargs.copy()
-                    force_kwargs['key'] = force_key
-                    single_props = ('value', 'default', 'defaultValue', 'selected', 'initial_value')
-                    list_props = ('checked', 'values', 'checked_values', 'initial_values', 'initial_value_list')
-                    try:
-                        sig = inspect.signature(tree_select)
-                        params = sig.parameters
-                        for p in single_props:
-                            if p in params:
-                                force_kwargs[p] = single_force
-                        for p in list_props:
-                            if p in params:
-                                force_kwargs[p] = [single_force] if single_force else []
-                        # final safety: if 'checked' supported but not present, add it
-                        if 'checked' in params and 'checked' not in force_kwargs:
-                            force_kwargs['checked'] = [single_force] if single_force else []
-                        # call once more to force widget internal state to the single selection
-                        try:
-                            tree_select(tree_data, **force_kwargs)
-                        except Exception:
-                            # if forcing fails, continue but ensure session state has the single choice persisted
-                            pass
-                    except Exception:
-                        # if signature inspection failed, still persist single and continue
-                        st.session_state._last_nav_checked = [single_force] if single_force else []
+                added = [s for s in sel_list if s not in set(prev_list)]
+                if added:
+                    last_clicked = added[-1]
+                elif sel_list:
+                    last_clicked = sel_list[-1]
+                elif prev_list:
+                    last_clicked = prev_list[-1]
             except Exception:
-                # ignore forcing errors — we'll still try to set sel_path below
-                pass
+                last_clicked = sel_list[-1] if sel_list else (prev_list[-1] if prev_list else None)
 
-            # Persist normalized single check in session state (defensive)
+            # Persist a single normalized checked value (defensive)
             if last_clicked:
-                st.session_state._last_nav_checked = [last_clicked]
+                st.session_state['_last_nav_checked'] = [last_clicked]
             else:
-                # fallback to single persisted value if available
-                lst = st.session_state.get('_last_nav_checked', [])
-                if lst:
-                    last_clicked = lst[-1]
+                st.session_state['_last_nav_checked'] = [single_check] if single_check else []
 
-            # Build the selection path from the single inferred item (or fall back to default_top)
-            if last_clicked:
-                parts = str(last_clicked).split('|||')
+            # Build selection path from the normalized single value
+            selected_to_use = st.session_state['_last_nav_checked'][-1] if st.session_state.get('_last_nav_checked') else None
+            if selected_to_use:
+                parts = str(selected_to_use).split('|||')
                 path: Dict[str, str] = {}
                 for i, lvl in enumerate(HIER_LEVELS):
                     if i < len(parts) and parts[i].strip() != '':
                         path[lvl] = parts[i].strip()
                     else:
                         path[lvl] = 'All'
+                # Only trigger a rerun if selection actually changed (prevents feedback loops)
                 if path != st.session_state.get('sel_path', {}):
                     st.session_state.sel_path = path
                     st.session_state._rerun_trigger = st.session_state.get('_rerun_trigger', 0) + 1
                     safe_rerun()
-                selected_value = last_clicked
-            else:
-                # No single selection; fallback to default root selection
-                path = {lvl: (default_top if i == 0 else 'All') for i, lvl in enumerate(HIER_LEVELS)}
-                st.session_state.sel_path = path
-                selected_value = None
+                return path
+
+            # No selection -> fallback to default root
+            path = {lvl: (default_top if i == 0 else 'All') for i, lvl in enumerate(HIER_LEVELS)}
+            st.session_state.sel_path = path
+            return path
 
         except Exception as e:
+            # final fallback: try a minimal call and persist whatever the component returns
             try:
                 selected_raw = tree_select(tree_data)
                 sel_list = _to_sel_list(selected_raw)
@@ -1492,22 +1441,10 @@ with tab_dashboard:
                     st.session_state.sel_path = path
                     st.session_state._rerun_trigger = st.session_state.get('_rerun_trigger', 0) + 1
                     safe_rerun()
+                    return path
             except Exception as e2:
                 st.warning('Taxonomy tree widget failed to render in left nav: ' + str(e2))
-                selected_value = None
-
-        if selected_value:
-            parts = str(selected_value).split('|||')
-            path: Dict[str, str] = {}
-            for i, lvl in enumerate(HIER_LEVELS):
-                if i < len(parts) and parts[i].strip() != '':
-                    path[lvl] = parts[i].strip()
-                else:
-                    path[lvl] = 'All'
-            st.session_state.sel_path = path
-            return path
-
-        return st.session_state.get('sel_path', {})
+            return st.session_state.get('sel_path', {})
 
     # --- MAIN DASHBOARD content ---
     st.subheader("Main Dashboard")
