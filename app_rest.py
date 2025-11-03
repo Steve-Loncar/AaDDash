@@ -154,7 +154,21 @@ st.markdown(f"""
     .panel {{ background: {PANEL_BG}; border: 1px solid {PANEL_BORDER}; border-radius: 10px; padding: 16px 16px 8px 16px; }}
     .panel p, .panel li, .panel span, .panel div.body-text {{ color: {SECONDARY}; font-size: 14px; line-height: 1.45; }}
     .section-title {{ font-size: {CFG['fonts']['section_size']}px; font-weight: 600; color: {PRIMARY}; margin-bottom: 8px; }}
-    .kpi {{ background: {PANEL_BG}; border: 1px solid {PANEL_BORDER}; border-radius: 10px; padding: 14px; }}
+    /* KPI bubble styling: full-width in column, vertically centred and consistent height */
+    .kpi {{ 
+        background: {PANEL_BG}; 
+        border: 1px solid {PANEL_BORDER}; 
+        border-radius: 10px; 
+        padding: 14px; 
+        box-sizing: border-box;
+        width: 100%;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;   /* vertically center label/value within the KPI block */
+        align-items: flex-start;   /* align text to the left to match column content */
+        min-height: 72px;         /* consistent height so KPI blocks line up */
+        margin-bottom: 8px;
+    }}
     .kpi .label {{ font-size: 12px; color: {SECONDARY}; margin-bottom: 6px; }}
     .kpi .value {{ font-size: 20px; color: {PRIMARY}; font-weight: 700; }}
 
@@ -196,7 +210,7 @@ st.markdown(
     .block-container { padding-top: 12px !important; }
     </style>
     """,
-   unsafe_allow_html=True,
+    unsafe_allow_html=True,
 )
 
 
@@ -1035,8 +1049,9 @@ with tab_home:
     except Exception:
         unique_players = 0
 
-    # KPI row
-    k1, k2, k3 = st.columns(3, gap="large")
+    # KPI row — use the same column width ratios as the three main columns below
+    # so KPI cards align directly above their corresponding content columns.
+    k1, k2, k3 = st.columns([1, 1.25, 1], gap="large")
     with k1:
         kpi_card('Rows', rows_count, suffix='', color=PRIMARY)
     with k2:
@@ -1372,28 +1387,75 @@ with tab_dashboard:
             if 'expanded' in params and expanded_ancestors:
                 call_kwargs['expanded'] = expanded_ancestors
 
+            # First, call the widget normally and inspect the returned value.
             selected_raw = tree_select(tree_data, **call_kwargs)
             sel_list = _to_sel_list(selected_raw)
 
+            # Normalize previous state variables
             prev_list = st.session_state.get('_last_nav_checked', []) or []
-            prev_set = set(prev_list)
-            curr_set = set(sel_list)
 
-            added = [s for s in sel_list if s not in prev_set]
-            removed = [s for s in prev_list if s not in curr_set]
-
+            # Try to infer the last-clicked item (added wins, fallback to last in returned list)
+            added = [s for s in sel_list if s not in set(prev_list)]
             last_clicked = None
             if added:
                 last_clicked = added[-1]
             elif sel_list:
                 last_clicked = sel_list[-1]
-            elif removed:
-                last_clicked = prev_list[-1] if prev_list else None
+            elif prev_list:
+                last_clicked = prev_list[-1]
+
+            # If widget returned >1 checked item (sticky behaviour), immediately force a controlled re-render
+            # with only the single inferred selection. Use a small reset counter to produce a unique key so the
+            # underlying component instance is recreated and its internal checked state is replaced.
+            try:
+                if len(sel_list) > 1:
+                    single_force = last_clicked or (sel_list[-1] if sel_list else pre_check)
+                    # persist a single checked entry
+                    st.session_state._last_nav_checked = [single_force] if single_force else []
+                    # bump reset counter so we can generate a unique component key
+                    st.session_state['_nav_force_reset'] = st.session_state.get('_nav_force_reset', 0) + 1
+                    force_key = comp_key + f"_reset_{st.session_state['_nav_force_reset']}"
+
+                    # Build force_kwargs: ensure we set both single-style and list-style props where supported.
+                    force_kwargs = call_kwargs.copy()
+                    force_kwargs['key'] = force_key
+                    single_props = ('value', 'default', 'defaultValue', 'selected', 'initial_value')
+                    list_props = ('checked', 'values', 'checked_values', 'initial_values', 'initial_value_list')
+                    try:
+                        sig = inspect.signature(tree_select)
+                        params = sig.parameters
+                        for p in single_props:
+                            if p in params:
+                                force_kwargs[p] = single_force
+                        for p in list_props:
+                            if p in params:
+                                force_kwargs[p] = [single_force] if single_force else []
+                        # final safety: if 'checked' supported but not present, add it
+                        if 'checked' in params and 'checked' not in force_kwargs:
+                            force_kwargs['checked'] = [single_force] if single_force else []
+                        # call once more to force widget internal state to the single selection
+                        try:
+                            tree_select(tree_data, **force_kwargs)
+                        except Exception:
+                            # if forcing fails, continue but ensure session state has the single choice persisted
+                            pass
+                    except Exception:
+                        # if signature inspection failed, still persist single and continue
+                        st.session_state._last_nav_checked = [single_force] if single_force else []
+            except Exception:
+                # ignore forcing errors — we'll still try to set sel_path below
+                pass
+
+            # Persist normalized single check in session state (defensive)
+            if last_clicked:
+                st.session_state._last_nav_checked = [last_clicked]
             else:
-                last_clicked = None
+                # fallback to single persisted value if available
+                lst = st.session_state.get('_last_nav_checked', [])
+                if lst:
+                    last_clicked = lst[-1]
 
-            st.session_state._last_nav_checked = sel_list
-
+            # Build the selection path from the single inferred item (or fall back to default_top)
             if last_clicked:
                 parts = str(last_clicked).split('|||')
                 path: Dict[str, str] = {}
@@ -1408,9 +1470,8 @@ with tab_dashboard:
                     safe_rerun()
                 selected_value = last_clicked
             else:
-                path: Dict[str, str] = {}
-                for i, lvl in enumerate(HIER_LEVELS):
-                    path[lvl] = default_top if i == 0 else 'All'
+                # No single selection; fallback to default root selection
+                path = {lvl: (default_top if i == 0 else 'All') for i, lvl in enumerate(HIER_LEVELS)}
                 st.session_state.sel_path = path
                 selected_value = None
 
