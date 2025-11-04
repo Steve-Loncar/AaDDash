@@ -985,17 +985,72 @@ def heatmap_all_tab_ui(df, default_metric="EBITDA margin 2025", value_col=None):
         return
 
     # Build list of metric options from the dataframe values (non-empty, deduped)
-    metric_options = [str(x).strip() for x in pd.Series(df[metric_col].astype(str)).unique() if str(x).strip() and str(x).strip().lower() not in ['nan', 'none']]
-    if not metric_options:
+    metric_options_df = [str(x).strip() for x in pd.Series(df[metric_col].astype(str)).unique() if str(x).strip() and str(x).strip().lower() not in ['nan', 'none']]
+    if not metric_options_df:
         st.warning("No metric values found in 'Fiscal Metric Flattened' column.")
         return
 
-    # choose default intelligently
-    default_choice = default_metric if any(default_metric.lower() in m.lower() for m in metric_options) else metric_options[0]
-    metric_choice = st.selectbox("Determining factor (metric)", options=metric_options, index=metric_options.index(default_choice) if default_choice in metric_options else 0, help="Choose metric used to color the heatmap.")
+    # Present a fixed set of user-facing choices (per request).
+    desired_choices = [
+        "EBITDA Margin FY23",
+        "EBITDA Margin FY24",
+        "EBITDA Margin FY25",
+        "EBITDA CAGR 23-25",
+        "Revenue CAGR 23-25",
+    ]
 
+    # Helper: try to find the best matching actual dataset metric from metric_options_df
+    def _best_match_for(desired_label: str, options: List[str]) -> Optional[str]:
+        lc_opts = [o.lower() for o in options]
+        # token groups per desired label (digits checked against 'fy' variants as well)
+        tokens_map = {
+            "EBITDA Margin FY23": ["ebitda", "margin", "23"],
+            "EBITDA Margin FY24": ["ebitda", "margin", "24"],
+            "EBITDA Margin FY25": ["ebitda", "margin", "25"],
+            "EBITDA CAGR 23-25": ["ebitda", "cagr", "23"],
+            "Revenue CAGR 23-25": ["revenue", "cagr", "23"],
+        }
+        toks = tokens_map.get(desired_label, [t.lower() for t in desired_label.split()])
+
+        def _tok_in(s: str, tok: str) -> bool:
+            s = s.lower()
+            if tok.isdigit():
+                return f"fy{tok}" in s or tok in s
+            return tok in s
+
+        for opt in options:
+            low = opt.lower()
+            ok = True
+            for t in toks:
+                if not _tok_in(low, t):
+                    ok = False
+                    break
+            if ok:
+                return opt
+        # fallback: try looser matching (any token present)
+        for opt in options:
+            low = opt.lower()
+            if any(_tok_in(low, t) for t in toks):
+                return opt
+        return None
+
+    # Build a mapping from desired label -> actual dataset metric (or None)
+    mapped_metrics = {}
+    for d in desired_choices:
+        mapped = _best_match_for(d, metric_options_df)
+        mapped_metrics[d] = mapped  # may be None if no match
+
+    # Present only the desired labels as choices (user UI requirement)
+    default_choice = default_metric if default_metric in desired_choices else "EBITDA Margin FY25"
+    if default_choice not in desired_choices:
+        default_choice = desired_choices[0]
+    metric_choice = st.selectbox("Determining factor (metric)", options=desired_choices, index=desired_choices.index(default_choice), help="Choose metric used to color the heatmap.")
+
+    # Map the selected, user-friendly label to the actual metric string present in the dataset.
+    # If we found a mapped dataset metric, use that; otherwise pass the chosen label (likely yields empty results).
+    chosen_dataset_metric = mapped_metrics.get(metric_choice) or metric_choice
     with st.spinner("Building matrix..."):
-        matrix, row_labels, col_labels = build_heatmap_matrix_from_paths(df, metric_name=metric_choice, value_col=value_col or detected_value_col)
+        matrix, row_labels, col_labels = build_heatmap_matrix_from_paths(df, metric_name=chosen_dataset_metric, value_col=value_col or detected_value_col)
 
     if matrix.size == 0 or not _np.isfinite(matrix).any():
         st.warning(f"No numeric data found for metric '{metric_choice}'. Verify mappings and that a numeric 'Value' column exists.")
@@ -1608,7 +1663,8 @@ with tab_dashboard:
 
         # Render commentary (left) and sources (right) and show provenance when falling back
         try:
-            com_col_left, com_col_right = st.columns([3, 1], gap="large")
+            # Use 2:1 layout so commentary takes ~2/3 and sources ~1/3
+            com_col_left, com_col_right = st.columns([2, 1], gap="large")
             with com_col_left:
                 st.markdown("#### Financial commentary")
                 if fin_provenance:
@@ -2067,26 +2123,29 @@ with tab_dashboard:
                 p_comment_text = None
                 p_source_text = None
 
-            # --- Render players commentary under the player charts (above the table) and then show the table ---
+            # --- Render players commentary and sources side-by-side (2/3 commentary, 1/3 sources) ---
             try:
-                st.markdown('#### Player commentary')
-                if top_player_name:
-                    st.markdown(f"**Top player (by Revenue FY25):** {top_player_name}")
-                if p_comment_text:
-                    for para in str(p_comment_text).split("\n\n"):
-                        st.markdown(para)
-                else:
+                p_col_left, p_col_right = st.columns([2, 1], gap="large")
+                with p_col_left:
+                    st.markdown('#### Player commentary')
                     if top_player_name:
-                        st.markdown(f"_No player commentary found for {top_player_name} in this node._")
+                        st.markdown(f"**Top player (by Revenue FY25):** {top_player_name}")
+                    if p_comment_text:
+                        for para in str(p_comment_text).split("\n\n"):
+                            st.markdown(para)
                     else:
-                        st.markdown("_No player commentary available._")
+                        if top_player_name:
+                            st.markdown(f"_No player commentary found for {top_player_name} in this node._")
+                        else:
+                            st.markdown("_No player commentary available._")
 
-                st.markdown('#### Player sources')
-                if p_source_text:
-                    for s in str(p_source_text).split("\n\n"):
-                        st.markdown(f"- {s}")
-                else:
-                    st.markdown("_No player sources found._")
+                with p_col_right:
+                    st.markdown('#### Player sources')
+                    if p_source_text:
+                        for s in str(p_source_text).split("\n\n"):
+                            st.markdown(f"- {s}")
+                    else:
+                        st.markdown("_No player sources found._")
 
             except Exception:
                 # If something goes wrong rendering commentary, continue to table rendering
@@ -2156,10 +2215,14 @@ with tab_heatmap:
             rev23 = st.checkbox('Revenue FY23', key='hm_rev23', value=False)
             rev24 = st.checkbox('Revenue FY24', key='hm_rev24', value=False)
             rev25 = st.checkbox('Revenue FY25', key='hm_rev25', value=False)
+            # Add Revenue CAGR option (lookup-only; do NOT recalculate)
+            rev_cagr = st.checkbox('Revenue CAGR 23-25', key='hm_rev_cagr', value=False)
         with col2:
             ebt23 = st.checkbox('EBITDA FY23', key='hm_ebt23', value=False)
             ebt24 = st.checkbox('EBITDA FY24', key='hm_ebt24', value=False)
             ebt25 = st.checkbox('EBITDA FY25', key='hm_ebt25', value=False)
+            # Add EBITDA CAGR option (lookup-only; do NOT recalculate)
+            ebt_cagr = st.checkbox('EBITDA CAGR 23-25', key='hm_ebt_cagr', value=False)
         with col3:
             mgn23 = st.checkbox('EBITDA Margin FY23', key='hm_mgn23', value=False)
             mgn24 = st.checkbox('EBITDA Margin FY24', key='hm_mgn24', value=False)
@@ -2170,12 +2233,16 @@ with tab_heatmap:
             metric_cols.append(('Revenue FY24', ('revenue', 'fy24')))
         if rev25:
             metric_cols.append(('Revenue FY25', ('revenue', 'fy25')))
+        if rev_cagr:
+            metric_cols.append(('Revenue CAGR 23-25', ('revenue_cagr', '')))
         if ebt23:
             metric_cols.append(('EBITDA FY23', ('ebitda', 'fy23')))
         if ebt24:
             metric_cols.append(('EBITDA FY24', ('ebitda', 'fy24')))
         if ebt25:
             metric_cols.append(('EBITDA FY25', ('ebitda', 'fy25')))
+        if ebt_cagr:
+            metric_cols.append(('EBITDA CAGR 23-25', ('ebitda_cagr', '')))
         if mgn23:
             metric_cols.append(('EBITDA Margin FY23', ('margin', 'fy23')))
         if mgn24:
@@ -2204,6 +2271,45 @@ with tab_heatmap:
                     st.warning('No taxonomy rows selected — the heatmap will be empty. Select at least one row.')
                 else:
                     MET = CFG.get('metrics', {})
+                    
+                    # Helper: try to lookup an existing metric row in the node DF by keyword tokens.
+                    def _lookup_metric_by_keywords(df_node: pd.DataFrame, metric_col_name: Optional[str], value_col_name: Optional[str], keywords: List[str]):
+                        if df_node is None or df_node.empty:
+                            return None
+                        # If metric_col_name/value_col_name not provided, fall back to detection
+                        if not metric_col_name or metric_col_name not in df_node.columns:
+                            metric_col_name, detected_value_col = _find_metric_and_value_cols(df_node)
+                        else:
+                            detected_value_col = value_col_name if (value_col_name and value_col_name in df_node.columns) else None
+                        if not metric_col_name:
+                            return None
+                        try:
+                            lc = df_node[metric_col_name].astype(str).str.lower()
+                            mask = pd.Series(True, index=df_node.index)
+                            for kw in keywords:
+                                mask = mask & lc.str.contains(str(kw).strip().lower(), na=False)
+                            matches = df_node.loc[mask]
+                            if matches is None or matches.empty:
+                                return None
+                            # Choose first numeric value in the detected value column if present; else try to coerce any numeric-like column
+                            value_col = detected_value_col
+                            if not value_col:
+                                # try to find a column named 'Value' case-insensitively
+                                cols_lower = {c.strip().lower(): c for c in df_node.columns}
+                                value_col = cols_lower.get('value')
+                            if not value_col:
+                                # try to find first numeric column
+                                numeric_cols = [c for c in df_node.columns if df_node[c].dtype.kind in 'fi']
+                                value_col = numeric_cols[0] if numeric_cols else None
+                            if not value_col:
+                                return None
+                            # coerce numeric and take the first non-null
+                            vals = pd.to_numeric(matches[value_col], errors='coerce').dropna()
+                            if vals.empty:
+                                return None
+                            return float(vals.iloc[0])
+                        except Exception:
+                            return None
 
                     def subset_for_path(df: pd.DataFrame, path_str: str, levels: List[str]) -> pd.DataFrame:
                         parts = [p.strip() for p in path_str.split(' / ') if p.strip() != '']
@@ -2232,6 +2338,16 @@ with tab_heatmap:
                             rv = rev_vals.get(fy)
                             eb = ebt_vals.get(fy)
                             row[f'EBITDA Margin {fy.upper()}'] = calculate_ebitda_margin(rv, eb) if rv is not None and eb is not None else None
+                        
+                        # Lookup existing CAGR metrics in the node rows (do NOT recalculate)
+                        # Detect metric/value column names once per node
+                        metric_col_name, detected_value_col = _find_metric_and_value_cols(df_node)
+                        # Revenue CAGR lookup: look for rows whose metric cell contains both 'cagr' and 'revenue'
+                        rev_cagr_val = _lookup_metric_by_keywords(df_node, metric_col_name, detected_value_col, ['cagr', 'revenue'])
+                        ebt_cagr_val = _lookup_metric_by_keywords(df_node, metric_col_name, detected_value_col, ['cagr', 'ebitda'])
+                        # Keep the same labels as the UI checkboxes
+                        row['Revenue CAGR 23-25'] = rev_cagr_val
+                        row['EBITDA CAGR 23-25'] = ebt_cagr_val
                         rows.append(row)
                     df_heat_raw = pd.DataFrame(rows).set_index('__node')
                     final_cols = []
@@ -2242,6 +2358,11 @@ with tab_heatmap:
                             final_cols.append(f'EBITDA {key[1].upper()}')
                         elif key[0] == 'margin':
                             final_cols.append(f'EBITDA Margin {key[1].upper()}')
+                        elif key[0] == 'revenue_cagr':
+                            # label used above is 'Revenue CAGR 23-25'
+                            final_cols.append('Revenue CAGR 23-25')
+                        elif key[0] == 'ebitda_cagr':
+                            final_cols.append('EBITDA CAGR 23-25')
                     df_final = df_heat_raw.reindex(columns=final_cols)
                     result_holder['df_final'] = df_final
                     if result_holder.get('df_final') is not None:
