@@ -69,9 +69,19 @@ def show_plotly(fig, height: Optional[int] = None, config: Optional[dict] = None
     - height: px or None
     - config: additional plotly config dict
     """
+    # Default Plotly config used for HTML fallback
     cfg = {"displayModeBar": False, "responsive": True}
     if isinstance(config, dict):
         cfg.update(config)
+
+    # Prefer Streamlit's native Plotly renderer to avoid dynamic-import JS issues
+    # in hosted environments. This keeps Streamlit's JS bundle consistent.
+    try:
+        st.plotly_chart(fig, use_container_width=True)
+        return
+    except Exception:
+        # If native renderer fails for some reason, fall back to embedding HTML.
+        pass
 
     inferred_h = None
     try:
@@ -82,8 +92,16 @@ def show_plotly(fig, height: Optional[int] = None, config: Optional[dict] = None
         inferred_h = None
 
     h = height or inferred_h or 600
-    html_str = pio.to_html(fig, include_plotlyjs="cdn", full_html=False, config=cfg)
-    st.components.v1.html(html_str, height=h, scrolling=True)
+    try:
+        html_str = pio.to_html(fig, include_plotlyjs="cdn", full_html=False, config=cfg)
+        st.components.v1.html(html_str, height=h, scrolling=True)
+    except Exception:
+        # Last-resort: write the figure object so the app doesn't hard-fail.
+        try:
+            st.write(fig)
+        except Exception:
+            # Swallow — we don't want the whole app to crash
+            pass
 
 
 def load_config() -> Dict:
@@ -983,7 +1001,7 @@ def render_heatmap_figure(matrix, row_labels, col_labels, metric_name="Metric", 
     )
     return fig
 
-def heatmap_all_tab_ui(df, default_metric="EBITDA margin 2025", value_col=None):
+def heatmap_all_tab_ui(df, default_metric="EBITDA Margin FY25", value_col=None):
     """
     Streamlit UI for the 'Heatmap - all' tab. Metric choices are read from the dataset to avoid
     mismatches between hard-coded names and what's actually present in the 'Fiscal Metric Flattened' column.
@@ -997,7 +1015,8 @@ def heatmap_all_tab_ui(df, default_metric="EBITDA margin 2025", value_col=None):
         return
 
     # Build list of metric options from the dataframe values (non-empty, deduped)
-    metric_options_df = [str(x).strip() for x in pd.Series(df[metric_col].astype(str)).unique() if str(x).strip() and str(x).strip().lower() not in ['nan', 'none']]
+    metric_options_df = [str(x).strip() for x in pd.Series(df[metric_col].astype(str)).unique()
+                         if str(x).strip() and str(x).strip().lower() not in ['nan', 'none']]
     if not metric_options_df:
         st.warning("No metric values found in 'Fiscal Metric Flattened' column.")
         return
@@ -1011,64 +1030,88 @@ def heatmap_all_tab_ui(df, default_metric="EBITDA margin 2025", value_col=None):
         "Revenue CAGR 23-25",
     ]
 
-    # Helper: try to find the best matching actual dataset metric from metric_options_df
-    def _best_match_for(desired_label: str, options: List[str]) -> Optional[str]:
-        lc_opts = [o.lower() for o in options]
-        # token groups per desired label (digits checked against 'fy' variants as well)
-        tokens_map = {
-            "EBITDA Margin FY23": ["ebitda", "margin", "23"],
-            "EBITDA Margin FY24": ["ebitda", "margin", "24"],
-            "EBITDA Margin FY25": ["ebitda", "margin", "25"],
-            "EBITDA CAGR 23-25": ["ebitda", "cagr", "23"],
-            "Revenue CAGR 23-25": ["revenue", "cagr", "23"],
-        }
-        toks = tokens_map.get(desired_label, [t.lower() for t in desired_label.split()])
+    # Normalization helper for cast-iron matching:
+    # Lowercase, remove punctuation, collapse whitespace, normalise 'fy' tokens.
+    def _normalize_label(s: Optional[str]) -> str:
+        if s is None:
+            return ''
+        s2 = str(s).lower()
+        # Replace 'fy 25' or 'fy-25' -> 'fy25'
+        s2 = re.sub(r'fy[\s\-]*([0-9]{2,4})', r'fy\1', s2)
+        # Remove any non-alphanumeric characters except spaces
+        s2 = re.sub(r'[^a-z0-9\s]', ' ', s2)
+        # Collapse whitespace
+        s2 = re.sub(r'\s+', ' ', s2).strip()
+        return s2
 
-        def _tok_in(s: str, tok: str) -> bool:
-            s = s.lower()
-            if tok.isdigit():
-                return f"fy{tok}" in s or tok in s
-            return tok in s
+    # Build map normalized_option -> original_option (first occurrence wins)
+    norm_to_option = {}
+    for opt in metric_options_df:
+        n = _normalize_label(opt)
+        if n and n not in norm_to_option:
+            norm_to_option[n] = opt
 
+    # Looser fallback matching (token presence) retained but used only if normalized exact fails
+    def _loose_match(desired_label: str, options: List[str]) -> Optional[str]:
+        toks = [t.strip() for t in re.split(r'[\s\-/]+', desired_label) if t.strip()]
+        toks = [t for t in toks if t and len(t) > 0]
         for opt in options:
             low = opt.lower()
             ok = True
             for t in toks:
-                if not _tok_in(low, t):
-                    ok = False
-                    break
+                if t.isdigit():
+                    if f"fy{t}" not in low and t not in low:
+                        ok = False
+                        break
+                else:
+                    if t.lower() not in low:
+                        ok = False
+                        break
             if ok:
                 return opt
-        # fallback: try looser matching (any token present)
+        # final fallback: any option that contains any token
         for opt in options:
             low = opt.lower()
-            if any(_tok_in(low, t) for t in toks):
+            if any((t.isdigit() and (f"fy{t}" in low or t in low)) or (not t.isdigit() and t.lower() in low) for t in toks):
                 return opt
         return None
-
-    # Build a mapping from desired label -> actual dataset metric (or None)
-    mapped_metrics = {}
-    for d in desired_choices:
-        mapped = _best_match_for(d, metric_options_df)
-        mapped_metrics[d] = mapped  # may be None if no match
 
     # Present only the desired labels as choices (user UI requirement)
     default_choice = default_metric if default_metric in desired_choices else "EBITDA Margin FY25"
     if default_choice not in desired_choices:
         default_choice = desired_choices[0]
-    metric_choice = st.selectbox("Determining factor (metric)", options=desired_choices, index=desired_choices.index(default_choice), help="Choose metric used to color the heatmap.")
+    metric_choice = st.selectbox("Determining factor (metric)", options=desired_choices,
+                                 index=desired_choices.index(default_choice),
+                                 help="Choose metric used to color the heatmap.")
 
-    # Map the selected, user-friendly label to the actual metric string present in the dataset.
-    # If we found a mapped dataset metric, use that; otherwise pass the chosen label (likely yields empty results).
-    chosen_dataset_metric = mapped_metrics.get(metric_choice) or None
-    if chosen_dataset_metric is None:
-        st.warning(f"No dataset metric could be matched for the chosen label '{metric_choice}'. The heatmap will likely be empty.")
-        chosen_dataset_metric_display = metric_choice
+    # CAST-IRON matching: normalized exact match first, then loose fallback
+    norm_desired = _normalize_label(metric_choice)
+    chosen_dataset_metric = None
+    if norm_desired and norm_desired in norm_to_option:
+        chosen_dataset_metric = norm_to_option[norm_desired]
+        matched_by = "exact (normalized)"
     else:
-        chosen_dataset_metric_display = chosen_dataset_metric
+        # try looser matching
+        loose = _loose_match(metric_choice, metric_options_df)
+        if loose:
+            chosen_dataset_metric = loose
+            matched_by = "loose token match"
+        else:
+            chosen_dataset_metric = None
+            matched_by = None
+
+    # Show user what dataset metric was matched (helpful for debugging)
+    if chosen_dataset_metric:
+        st.caption(f"Using dataset metric: '{chosen_dataset_metric}' (matched by: {matched_by})")
+    else:
+        st.warning(f"No dataset metric could be matched for the chosen label '{metric_choice}'. The heatmap will likely be empty.")
 
     with st.spinner("Building matrix..."):
-        matrix, row_labels, col_labels, matched_count = build_heatmap_matrix_from_paths(df, metric_name=chosen_dataset_metric_display if chosen_dataset_metric is not None else metric_choice, value_col=value_col or detected_value_col)
+        matrix, row_labels, col_labels, matched_count = build_heatmap_matrix_from_paths(
+            df,
+            metric_name=chosen_dataset_metric if chosen_dataset_metric is not None else metric_choice,
+            value_col=value_col or detected_value_col
+        )
 
     # Show how many dataset rows matched the metric search (exact or fallback)
     try:
@@ -1081,7 +1124,7 @@ def heatmap_all_tab_ui(df, default_metric="EBITDA margin 2025", value_col=None):
         return
 
     colorscale = st.selectbox("Color scale", options=["RdYlGn", "Viridis", "Blues", "RdBu"], index=0)
-    fig = render_heatmap_figure(matrix, row_labels, col_labels, metric_name=metric_choice, colorscale=colorscale)
+    fig = render_heatmap_figure(matrix, row_labels, col_labels, metric_name=chosen_dataset_metric or metric_choice, colorscale=colorscale)
     st.plotly_chart(fig, use_container_width=True)
 
     # Provide CSV download of the matrix (with labels)
@@ -2448,7 +2491,8 @@ with tab_heatmap_all:
     try:
         # Use the same active dataframe as the rest of the app
         df_active = get_active_df()
-        heatmap_all_tab_ui(df_active, default_metric="EBITDA margin 2025", value_col="Value")
+        # Default to EBITDA Margin FY25 (user-facing label). The UI remains selectable.
+        heatmap_all_tab_ui(df_active, default_metric="EBITDA Margin FY25", value_col="Value")
     except Exception as e:
         st.error("Failed to render 'Heatmap - all' tab: " + str(e))
     st.markdown('</div>', unsafe_allow_html=True)
