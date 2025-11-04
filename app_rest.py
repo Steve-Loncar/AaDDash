@@ -1173,7 +1173,7 @@ def heatmap_all_tab_ui(df, default_metric="EBITDA Margin FY25", value_col=None):
         return None
 
     # Present only the desired labels as choices (user UI requirement)
-    default_choice = default_metric if default_metric in desired_choices else "EBITDA Margin FY25"
+    default_choice = "Hybrid composite 23-25"
     if default_choice not in desired_choices:
         default_choice = desired_choices[0]
     metric_choice = st.selectbox("Determining factor (metric)", options=desired_choices,
