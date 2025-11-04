@@ -69,18 +69,33 @@ def show_plotly(fig, height: Optional[int] = None, config: Optional[dict] = None
     - height: px or None
     - config: additional plotly config dict
     """
-    # Default Plotly config used for HTML fallback
     cfg = {"displayModeBar": False, "responsive": True}
     if isinstance(config, dict):
         cfg.update(config)
 
-    # Prefer Streamlit's native Plotly renderer to avoid dynamic-import JS issues
-    # in hosted environments. This keeps Streamlit's JS bundle consistent.
+    # Ensure transparent backgrounds so no white box shows up behind the chart
     try:
-        st.plotly_chart(fig, use_container_width=True)
+        # This will harmlessly noop if fig has no layout
+        fig.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+        )
+        # Make modebar background transparent on plotly.js where supported
+        if "modebar" not in cfg:
+            cfg.setdefault("displayModeBar", False)
+    except Exception:
+        pass
+
+    # Prefer Streamlit's native Plotly renderer (allows width stretching via use_container_width)
+    try:
+        # Pass height through if provided — st.plotly_chart accepts height and will render responsively for width.
+        if height:
+            st.plotly_chart(fig, use_container_width=True, height=height, config=cfg)
+        else:
+            st.plotly_chart(fig, use_container_width=True, config=cfg)
         return
     except Exception:
-        # If native renderer fails for some reason, fall back to embedding HTML.
+        # Fallback to embedding HTML when native renderer fails in some hosting environments
         pass
 
     inferred_h = None
@@ -93,8 +108,21 @@ def show_plotly(fig, height: Optional[int] = None, config: Optional[dict] = None
 
     h = height or inferred_h or 600
     try:
-        html_str = pio.to_html(fig, include_plotlyjs="cdn", full_html=False, config=cfg)
-        st.components.v1.html(html_str, height=h, scrolling=True)
+        # Use to_html but force transparent styling and wrap in a transparent container.
+        html_str = pio.to_html(fig, include_plotlyjs="cdn", full_html=False, config=cfg, default_height=h)
+        wrapper = f"""
+            <div style="background: transparent;">
+                <style>
+                    /* Force Plotly internals to be transparent where possible */
+                    .js-plotly-plot .plot-container, .js-plotly-plot .svg-container, .plotly-graph-div {{
+                        background: transparent !important;
+                    }}
+                    .modebar {{ background: rgba(0,0,0,0) !important; }}
+                </style>
+                {html_str}
+            </div>
+        """
+        st.components.v1.html(wrapper, height=h, scrolling=True)
     except Exception:
         # Last-resort: write the figure object so the app doesn't hard-fail.
         try:
