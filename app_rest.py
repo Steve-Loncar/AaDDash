@@ -847,9 +847,19 @@ def build_node_metric_map(df, metric_name, value_col=None):
         return {}, _collect_hierarchy_cols(df)
     value_col = value_col or detected_value_col
 
-    # Filter rows that correspond to the metric (case-insensitive substring match)
-    mask = df[metric_col].astype(str).str.contains(str(metric_name), case=False, na=False)
-    df_metric = df.loc[mask].copy()
+    # Try to match metric rows robustly:
+    # 1) prefer exact (case-insensitive) equality of the metric string,
+    # 2) fallback to substring contains if no exact matches were found.
+    mname = '' if metric_name is None else str(metric_name).strip()
+    metric_col_series = df[metric_col].astype(str)
+    mask_exact = metric_col_series.str.strip().str.lower() == mname.lower()
+    if mask_exact.any():
+        df_metric = df.loc[mask_exact].copy()
+    else:
+        # fallback: substring match (case-insensitive) — kept for backwards compatibility
+        mask = metric_col_series.str.contains(mname, case=False, na=False)
+        df_metric = df.loc[mask].copy()
+
     if df_metric.empty:
         return {}, _collect_hierarchy_cols(df)
 
