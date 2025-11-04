@@ -836,15 +836,15 @@ def build_node_metric_map(df, metric_name, value_col=None):
     """
     Build a mapping from hierarchy-path (string) to numeric metric value for metric_name.
     More robust detection of metric/value columns and hierarchy order.
-    Returns: (metric_map: dict path -> value, hierarchy_cols: list)
+    Returns: (metric_map: dict path -> value, hierarchy_cols: list, matched_count: int)
     """
     if df is None or df.empty:
-        return {}, []
+        return {}, [], 0
 
     metric_col, detected_value_col = _find_metric_and_value_cols(df)
     if metric_col is None:
         # cannot operate without metric column
-        return {}, _collect_hierarchy_cols(df)
+        return {}, _collect_hierarchy_cols(df), 0
     value_col = value_col or detected_value_col
 
     # Try to match metric rows robustly:
@@ -855,13 +855,15 @@ def build_node_metric_map(df, metric_name, value_col=None):
     mask_exact = metric_col_series.str.strip().str.lower() == mname.lower()
     if mask_exact.any():
         df_metric = df.loc[mask_exact].copy()
+        used_fallback = False
     else:
         # fallback: substring match (case-insensitive) — kept for backwards compatibility
-        mask = metric_col_series.str.contains(mname, case=False, na=False)
-        df_metric = df.loc[mask].copy()
+        mask_sub = metric_col_series.str.contains(mname, case=False, na=False)
+        df_metric = df.loc[mask_sub].copy()
+        used_fallback = True if not mask_exact.any() and mask_sub.any() else False
 
     if df_metric.empty:
-        return {}, _collect_hierarchy_cols(df)
+        return {}, _collect_hierarchy_cols(df), 0
 
     # Ensure numeric values (if value column missing, try to detect a numeric-like column)
     if value_col is None:
@@ -869,7 +871,7 @@ def build_node_metric_map(df, metric_name, value_col=None):
         candidates = [c for c in df_metric.columns if c not in _collect_hierarchy_cols(df) and c != metric_col and df_metric[c].dtype.kind in 'fi']
         value_col = candidates[0] if candidates else None
     if value_col is None:
-        return {}, _collect_hierarchy_cols(df)
+        return {}, _collect_hierarchy_cols(df), int(len(df_metric))
 
     df_metric[value_col] = _pd.to_numeric(df_metric[value_col], errors="coerce")
 
@@ -891,22 +893,22 @@ def build_node_metric_map(df, metric_name, value_col=None):
 
     nodes_df = _pd.DataFrame.from_records(records)
     if nodes_df.empty:
-        return {}, hierarchy_cols
+        return {}, hierarchy_cols, int(len(df_metric))
 
     # Aggregate duplicates (multiple rows mapping to same node) — use mean and drop NaNs
     agg = nodes_df.dropna(subset=["value"]).groupby("node_path", as_index=False).value.mean()
     metric_map = dict(zip(agg.node_path, agg.value))
-    return metric_map, hierarchy_cols
+    return metric_map, hierarchy_cols, int(len(df_metric))
 
 def build_heatmap_matrix_from_paths(df, metric_name="EBITDA margin 2025", value_col=None):
     """
     Build matrix where rows are full-paths and columns are hierarchy levels.
     Entry [i,j] is the metric value for the ancestor at level j of row i's path (NaN if missing).
     """
-    metric_map, hierarchy_cols = build_node_metric_map(df, metric_name, value_col=value_col)
+    metric_map, hierarchy_cols, matched_count = build_node_metric_map(df, metric_name, value_col=value_col)
 
     if not hierarchy_cols:
-        return _np.empty((0,0)), [], []
+        return _np.empty((0,0)), [], [], matched_count
 
     def get_full_path(row):
         parts = []
@@ -920,7 +922,7 @@ def build_heatmap_matrix_from_paths(df, metric_name="EBITDA margin 2025", value_
     full_paths_series = df.apply(get_full_path, axis=1)
     full_paths = [_p for _p in pd.Series(full_paths_series).unique() if _p and _p.strip() != ""]
     if not full_paths:
-        return _np.empty((0, len(hierarchy_cols))), [], hierarchy_cols
+        return _np.empty((0, len(hierarchy_cols))), [], hierarchy_cols, matched_count
 
     rows = []
     for path in full_paths:
@@ -935,7 +937,7 @@ def build_heatmap_matrix_from_paths(df, metric_name="EBITDA margin 2025", value_
         rows.append(row_vals)
 
     matrix = _np.array(rows, dtype=float)
-    return matrix, full_paths, hierarchy_cols
+    return matrix, full_paths, hierarchy_cols, matched_count
 
 def render_heatmap_figure(matrix, row_labels, col_labels, metric_name="Metric", colorscale="RdYlGn"):
     """Render heatmap; uses global min/max across matrix so shading is comparable across levels."""
@@ -1058,12 +1060,24 @@ def heatmap_all_tab_ui(df, default_metric="EBITDA margin 2025", value_col=None):
 
     # Map the selected, user-friendly label to the actual metric string present in the dataset.
     # If we found a mapped dataset metric, use that; otherwise pass the chosen label (likely yields empty results).
-    chosen_dataset_metric = mapped_metrics.get(metric_choice) or metric_choice
+    chosen_dataset_metric = mapped_metrics.get(metric_choice) or None
+    if chosen_dataset_metric is None:
+        st.warning(f"No dataset metric could be matched for the chosen label '{metric_choice}'. The heatmap will likely be empty.")
+        chosen_dataset_metric_display = metric_choice
+    else:
+        chosen_dataset_metric_display = chosen_dataset_metric
+
     with st.spinner("Building matrix..."):
-        matrix, row_labels, col_labels = build_heatmap_matrix_from_paths(df, metric_name=chosen_dataset_metric, value_col=value_col or detected_value_col)
+        matrix, row_labels, col_labels, matched_count = build_heatmap_matrix_from_paths(df, metric_name=chosen_dataset_metric_display if chosen_dataset_metric is not None else metric_choice, value_col=value_col or detected_value_col)
+
+    # Show how many dataset rows matched the metric search (exact or fallback)
+    try:
+        st.caption(f"Dataset rows matched for metric search: {matched_count}")
+    except Exception:
+        pass
 
     if matrix.size == 0 or not _np.isfinite(matrix).any():
-        st.warning(f"No numeric data found for metric '{metric_choice}'. Verify mappings and that a numeric 'Value' column exists.")
+        st.warning(f"No numeric data found for metric '{metric_choice}'. Verify mappings and that a numeric 'Value' column exists (matched rows: {matched_count}).")
         return
 
     colorscale = st.selectbox("Color scale", options=["RdYlGn", "Viridis", "Blues", "RdBu"], index=0)
