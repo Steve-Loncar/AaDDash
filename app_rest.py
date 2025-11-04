@@ -1248,84 +1248,37 @@ with tab_dashboard:
     st.markdown('<div class="section-title">Financial Overview</div>', unsafe_allow_html=True)
     df_active = get_active_df()
 
-    # Left navigation builder (single-call tree_select + normalized session-state)
+    # Left navigation builder (simple single-select; no tree, no forced reruns)
     def build_left_nav(df: pd.DataFrame, key_prefix: str = '') -> Dict[str, str]:
         st.markdown('<div class="section-title">Navigation</div>', unsafe_allow_html=True)
 
-        def _sanitize_key(s: str) -> str:
-            return re.sub(r'[^0-9a-zA-Z_]+', '_', str(s))[:64]
-
-        def build_tree_nodes_local(df_in: pd.DataFrame):
-            df_copy = df_in.copy().fillna('').astype(str)
-
-            def recurse(sub_df: pd.DataFrame, level_idx: int, prefix: List[str]):
-                if level_idx >= len(HIER_LEVELS):
-                    return []
-                level = HIER_LEVELS[level_idx]
-                vals = [v for v in sub_df[level].astype(str).str.strip().dropna().unique() if v != '']
-                nodes = []
-                for val in vals:
-                    path = prefix + [val]
-                    mask = sub_df[level].astype(str).str.strip().str.lower() == val.strip().lower()
-                    child_subset = sub_df[mask]
-                    children = recurse(child_subset, level_idx + 1, path)
-                    nodes.append({'label': val, 'value': '|||'.join(path), 'children': children})
-                return nodes
-
-            return recurse(df_copy, 0, [])
-
-        def _to_sel_list(selected) -> List[str]:
-            out: List[str] = []
+        # Build flat list of full-path node labels from the dataframe in row order.
+        present_levels = [lvl for lvl in HIER_LEVELS if isinstance(df, pd.DataFrame) and lvl in df.columns]
+        node_paths: List[str] = []
+        seen = set()
+        if df is not None and not df.empty and present_levels:
             try:
-                if not selected:
-                    return []
-                if isinstance(selected, dict):
-                    if 'checked' in selected and isinstance(selected['checked'], (list, tuple)):
-                        out = [str(s).strip() for s in selected['checked'] if s is not None and str(s).strip() != '']
-                    elif 'value' in selected and selected['value']:
-                        out = [str(selected['value']).strip()]
-                elif isinstance(selected, (list, tuple)):
-                    for s in selected:
-                        if isinstance(s, dict) and 'value' in s:
-                            v = s.get('value')
-                            if v:
-                                out.append(str(v).strip())
+                for _, row in df[present_levels].iterrows():
+                    parts = []
+                    for lvl in present_levels:
+                        val = str(row.get(lvl, '')).strip()
+                        if val and val.lower() not in ('nan', 'none'):
+                            parts.append(val)
                         else:
-                            if s:
-                                out.append(str(s).strip())
-                elif isinstance(selected, str):
-                    out = [selected.strip()]
-                else:
-                    out = [str(selected).strip()]
+                            break
+                    if not parts:
+                        continue
+                    path = ' / '.join(parts)
+                    if path not in seen:
+                        seen.add(path)
+                        node_paths.append(path)
             except Exception:
-                return []
-            return out
+                node_paths = []
 
-        tree_data = build_tree_nodes_local(df) if (df is not None and not df.empty) else []
-        selected_value = None
         default_top = CFG.get('startup', {}).get('default_main_category', 'Aerospace')
 
-        # Derive a current single-checked value from sel_path if present
-        current_checked_value = None
-        try:
-            sp = st.session_state.get('sel_path', {})
-            if sp:
-                parts = [str(sp.get(l, '')).strip() for l in HIER_LEVELS]
-                trimmed = []
-                for p in parts:
-                    if p and p != 'All':
-                        trimmed.append(p)
-                    else:
-                        break
-                if trimmed:
-                    current_checked_value = '|||'.join(trimmed)
-        except Exception:
-            current_checked_value = None
-
-        st.session_state.setdefault('_last_nav_checked', [])
-
-        # If tree_select isn't available, fall back to a single-level selectbox for the top level
-        if tree_select is None:
+        # If no full paths, fall back to a top-level select on the first hierarchy column.
+        if not node_paths:
             top_col = HIER_LEVELS[0] if len(HIER_LEVELS) > 0 else None
             top_vals: List[str] = []
             if top_col and isinstance(df, pd.DataFrame) and top_col in df.columns and not df[top_col].dropna().empty:
@@ -1335,116 +1288,38 @@ with tab_dashboard:
             if not top_vals:
                 top_vals = [default_top]
             sel = st.selectbox(top_col if top_col else 'Category', top_vals, index=0, key=f'{key_prefix}l1_nav')
-            selected_value = sel
+            # build sel_path (top level selected, deeper levels = 'All')
             path: Dict[str, str] = {}
             for i, lvl in enumerate(HIER_LEVELS):
                 path[lvl] = sel if i == 0 else 'All'
-            st.session_state.sel_path = path
-            st.session_state._rerun_trigger = st.session_state.get('_rerun_trigger', 0) + 1
+            # Persist selection only (no manual rerun triggers)
+            if path != st.session_state.get('sel_path', {}):
+                st.session_state.sel_path = path
             return path
 
-        pre_check = current_checked_value or default_top
-        comp_key = f'{key_prefix}taxonomy_tree'
-
-        # Single-call tree_select: call once, infer last-click, normalize session state, and set sel_path.
+        # Prefer nodes whose top-level equals default_top in the select index (UX nicety)
+        default_index = 0
         try:
-            sig = inspect.signature(tree_select)
-            params = sig.parameters
-            call_kwargs = {}
-            if 'key' in params:
-                call_kwargs['key'] = comp_key
-            if 'height' in params:
-                call_kwargs['height'] = 520
-            for single_param in ('multi_select', 'multiple', 'allow_multi_select', 'multi'):
-                if single_param in params:
-                    call_kwargs[single_param] = False
-            if 'no_cascade' in params:
-                call_kwargs['no_cascade'] = True
+            for i, p in enumerate(node_paths):
+                if p.split(' / ')[0].strip().lower() == str(default_top).strip().lower():
+                    default_index = i
+                    break
+        except Exception:
+            default_index = 0
 
-            # Choose a single starting check: prefer last persisted, else pre_check
-            last_checked = st.session_state.get('_last_nav_checked', [])
-            single_check = last_checked[-1] if last_checked else pre_check
+        sel_key = f'{key_prefix}left_nav_select'
+        selected = st.selectbox("Select taxonomy node", node_paths, index=default_index if default_index < len(node_paths) else 0, key=sel_key)
 
-            # Provide both single-style and list-style props where supported
-            single_props = ('value', 'default', 'defaultValue', 'selected', 'initial_value', 'initial')
-            list_props = ('checked', 'values', 'checked_values', 'initial_values', 'initial_value_list')
-            for p in single_props:
-                if p in params:
-                    call_kwargs[p] = single_check
-            for p in list_props:
-                if p in params:
-                    call_kwargs[p] = [single_check] if single_check else []
-            if 'checked' in params and 'checked' not in call_kwargs:
-                call_kwargs['checked'] = [single_check] if single_check else []
+        # Convert chosen full-path into the nested sel_path dict the app uses
+        parts = [p.strip() for p in selected.split(' / ') if p.strip() != '']
+        path: Dict[str, str] = {}
+        for i, lvl in enumerate(HIER_LEVELS):
+            path[lvl] = parts[i] if i < len(parts) and parts[i] != '' else 'All'
 
-            # Call the widget ONCE
-            selected_raw = tree_select(tree_data, **call_kwargs)
-            sel_list = _to_sel_list(selected_raw)
-            prev_list = st.session_state.get('_last_nav_checked', []) or []
-
-            # Infer last-clicked: new additions to the returned list win, otherwise fall back to last item
-            last_clicked = None
-            try:
-                added = [s for s in sel_list if s not in set(prev_list)]
-                if added:
-                    last_clicked = added[-1]
-                elif sel_list:
-                    last_clicked = sel_list[-1]
-                elif prev_list:
-                    last_clicked = prev_list[-1]
-            except Exception:
-                last_clicked = sel_list[-1] if sel_list else (prev_list[-1] if prev_list else None)
-
-            # Persist a single normalized checked value (defensive)
-            if last_clicked:
-                st.session_state['_last_nav_checked'] = [last_clicked]
-            else:
-                st.session_state['_last_nav_checked'] = [single_check] if single_check else []
-
-            # Build selection path from the normalized single value
-            selected_to_use = st.session_state['_last_nav_checked'][-1] if st.session_state.get('_last_nav_checked') else None
-            if selected_to_use:
-                parts = str(selected_to_use).split('|||')
-                path: Dict[str, str] = {}
-                for i, lvl in enumerate(HIER_LEVELS):
-                    if i < len(parts) and parts[i].strip() != '':
-                        path[lvl] = parts[i].strip()
-                    else:
-                        path[lvl] = 'All'
-                # Only trigger a rerun if selection actually changed (prevents feedback loops)
-                if path != st.session_state.get('sel_path', {}):
-                    st.session_state.sel_path = path
-                    st.session_state._rerun_trigger = st.session_state.get('_rerun_trigger', 0) + 1
-                    safe_rerun()
-                return path
-
-            # No selection -> fallback to default root
-            path = {lvl: (default_top if i == 0 else 'All') for i, lvl in enumerate(HIER_LEVELS)}
+        # Persist selection only; Streamlit will rerun automatically on widget change
+        if path != st.session_state.get('sel_path', {}):
             st.session_state.sel_path = path
-            return path
-
-        except Exception as e:
-            # final fallback: try a minimal call and persist whatever the component returns
-            try:
-                selected_raw = tree_select(tree_data)
-                sel_list = _to_sel_list(selected_raw)
-                st.session_state._last_nav_checked = sel_list
-                selected_value = sel_list[-1] if sel_list else None
-                if selected_value:
-                    parts = str(selected_value).split('|||')
-                    path: Dict[str, str] = {}
-                    for i, lvl in enumerate(HIER_LEVELS):
-                        if i < len(parts) and parts[i].strip() != '':
-                            path[lvl] = parts[i].strip()
-                        else:
-                            path[lvl] = 'All'
-                    st.session_state.sel_path = path
-                    st.session_state._rerun_trigger = st.session_state.get('_rerun_trigger', 0) + 1
-                    safe_rerun()
-                    return path
-            except Exception as e2:
-                st.warning('Taxonomy tree widget failed to render in left nav: ' + str(e2))
-            return st.session_state.get('sel_path', {})
+        return path
 
     # --- MAIN DASHBOARD content ---
     st.subheader("Main Dashboard")
