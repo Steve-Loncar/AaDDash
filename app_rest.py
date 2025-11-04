@@ -1223,22 +1223,27 @@ def heatmap_all_tab_ui(df, default_metric="EBITDA Margin FY25", value_col=None):
     # Make the heatmap area larger by default and optionally resizable by the user.
     # Default height: at least 800px (approx. double), or scaled by number of rows to avoid clipping.
     try:
-        default_height = max(800, 32 * len(row_labels)) if row_labels else 800
+        # Make the heatmap taller by default (at least double) and scale by rows to avoid clipping.
+        default_height = max(1200, 48 * len(row_labels)) if row_labels else 1200
     except Exception:
-        default_height = 800
+        default_height = 1200
 
-    resize_enabled = st.checkbox("Enable vertical resize for heatmap area (click & drag)", value=True, help="Allow adjusting the visible height of the heatmap by dragging the bottom edge.")
+    resize_enabled = st.checkbox(
+        "Enable vertical resize for heatmap area (click & drag)",
+        value=True,
+        help="Allow adjusting the visible height of the heatmap by dragging the bottom edge. Vertical resize only."
+    )
 
     if resize_enabled:
-        # Embed Plotly HTML inside a CSS-resizable container so users can drag to change height.
+        # Embed Plotly HTML inside a CSS-resizable container (vertical-only) so users can drag to change height.
         try:
             plot_html = pio.to_html(fig, include_plotlyjs="cdn", full_html=False, config={"displayModeBar": False, "responsive": True})
             wrapper_html = f"""
-            <div style="resize: vertical; overflow: auto; border:1px solid {PANEL_BORDER}; border-radius:6px; padding:6px; height:{default_height}px;">
+            <div style="resize: vertical; overflow: auto; border:1px solid {PANEL_BORDER}; border-radius:6px; padding:6px; height:{default_height}px; width:100%; box-sizing:border-box; background:{PANEL_BG};">
                 {plot_html}
             </div>
             """
-            # components.html height should reflect initial container height; allow scrolling.
+            # components.html height should reflect initial container height; allow scrolling inside the resized container.
             components.html(wrapper_html, height=default_height, scrolling=True)
         except Exception:
             # If embedding fails for any reason, fallback to Streamlit's native renderer.
