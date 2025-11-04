@@ -994,7 +994,7 @@ def build_heatmap_matrix_from_paths(df, metric_name="EBITDA margin 2025", value_
     matrix = _np.array(rows, dtype=float)
     return matrix, full_paths, hierarchy_cols, matched_count
 
-def render_heatmap_figure(matrix, row_labels, col_labels, metric_name="Metric", colorscale="RdYlGn"):
+def render_heatmap_figure(matrix, row_labels, col_labels, metric_name="Metric", colorscale="RdYlBu_r"):
     """Render heatmap; uses global min/max across matrix so shading is comparable across levels."""
     fig = _go.Figure()
     if matrix.size == 0 or not _np.isfinite(matrix).any():
@@ -1280,33 +1280,65 @@ def heatmap_all_tab_ui(df, default_metric="EBITDA Margin FY25", value_col=None):
         # Let the user pick the initial height (px) quickly, then they can drag to fine-tune.
         initial_height = st.slider("Initial heatmap height (px)", min_value=300, max_value=1200, value=default_height, step=50)
         try:
-            # Ensure the figure has transparent background for embedding (avoid white card in iframe)
+            # Ensure the figure uses the requested initial height so Plotly's internal divs get a meaningful size
             try:
-                fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+                fig.update_layout(height=int(initial_height), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', autosize=True)
             except Exception:
-                pass
-            plot_html = pio.to_html(fig, include_plotlyjs="cdn", full_html=False, config={"displayModeBar": False, "responsive": True})
-            # Wrap the generated plot HTML in a wrapper that forces the Plotly container to stretch to 100% height.
-            # Also ensure the wrapper has a transparent background so the app theme shows through.
+                try:
+                    fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+                except Exception:
+                    pass
+
+            plot_html = pio.to_html(
+                fig,
+                include_plotlyjs="cdn",
+                full_html=False,
+                config={"displayModeBar": False, "responsive": True}
+            )
+
+            # Wrap the generated plot HTML in a wrapper that forces the Plotly container to stretch
+            # to 100% width/height. Also ensure the wrapper has a transparent background so the app
+            # theme shows through. We add several selectors (.plotly-graph-div, .js-plotly-plot, .plot-container)
+            # because different Plotly versions use different internal class names.
             wrapped_plot_html = f"""
             <style>
-            /* Force the internal plot container to stretch so it matches the wrapper height */
-            .embedded-plotly-wrapper .js-plotly-plot {{
+            /* Ensure the outer wrapper fills the iframe space and allows vertical resize via the handle */
+            .embedded-plotly-wrapper {{
+                display: flex;
+                flex-direction: column;
+                height: {initial_height}px;
+                min-height: 200px;
+                max-height: 90vh;
+                resize: vertical;
+                overflow: auto;
+                background: transparent;
+                border: 1px solid {PANEL_BORDER};
+                border-radius: 6px;
+                padding: 6px;
+            }}
+            /* Force internal Plotly containers to stretch to the wrapper */
+            .embedded-plotly-wrapper .plotly-graph-div,
+            .embedded-plotly-wrapper .js-plotly-plot,
+            .embedded-plotly-wrapper .plot-container,
+            .embedded-plotly-wrapper .svg-container {{
+                width: 100% !important;
                 height: 100% !important;
                 min-height: 100% !important;
+                display: block !important;
             }}
-            .embedded-plotly-wrapper {{
-                height: 100%;
+            /* Make the immediate child of the wrapper flex so it stretches with the wrapper */
+            .embedded-plotly-wrapper > div {{
+                flex: 1 1 auto;
                 display: flex;
+                align-items: stretch;
             }}
             </style>
-            <div class="embedded-plotly-wrapper" style="resize: vertical; overflow: auto; border:1px solid {PANEL_BORDER}; border-radius:6px; padding:6px;
-            height:{initial_height}px; min-height:200px; max-height:90vh; background: transparent;">
+            <div class="embedded-plotly-wrapper">
             {plot_html}
             </div>
             """
-            # Set the components iframe a bit taller than the initial inner height so the handle is reachable.
-            # Use a larger buffer so the embedded plot isn't clipped and the draggable handle is usable.
+
+            # Set the components iframe taller than the inner wrapper so the draggable handle is reachable.
             outer_iframe_h = min(2000, max(700, initial_height + 400))
             components.html(wrapped_plot_html, height=outer_iframe_h, scrolling=True)
         except Exception:
@@ -2657,7 +2689,8 @@ with tab_heatmap:
 
                             annotations = z.apply(lambda col: col.map(fmt_val)).values.tolist()
                             z_plot = z_norm.values.tolist()
-                            colorscale = 'Blues'
+                            # Use a diverging "blue -> yellow -> red" palette so low=blue, high=red (thermal)
+                            colorscale = 'RdYlBu_r'
                             fig = go.Figure(data=go.Heatmap(z=z_plot, x=z.columns.tolist(), y=z.index.tolist(), text=annotations, hoverinfo='text', colorscale=colorscale, zmin=0, zmax=1, colorbar=dict(title='Relative (col)'), showscale=True))
                             text_annotations = []
                             for yi, row_idx in enumerate(z.index):
