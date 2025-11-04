@@ -1007,7 +1007,7 @@ def build_heatmap_matrix_from_paths(df, metric_name="EBITDA margin 2025", value_
     matrix = _np.array(rows, dtype=float)
     return matrix, full_paths, hierarchy_cols, matched_count
 
-def render_heatmap_figure(matrix, row_labels, col_labels, metric_name="Metric", colorscale=None):
+def render_heatmap_figure(matrix, row_labels, col_labels, metric_name="Metric", colorscale="Inferno"):
     """Render heatmap; uses global min/max across matrix so shading is comparable across levels."""
     fig = _go.Figure()
     if matrix.size == 0 or not _np.isfinite(matrix).any():
