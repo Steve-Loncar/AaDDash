@@ -1001,6 +1001,48 @@ def render_heatmap_figure(matrix, row_labels, col_labels, metric_name="Metric", 
     )
     return fig
 
+def build_matrix_from_metric_map(metric_map, df):
+    """
+    Build a matrix identical in shape to build_heatmap_matrix_from_paths but using
+    a precomputed metric_map: { "A / B / C": value }.
+    Returns: matrix, full_paths, hierarchy_cols, matched_count
+    """
+    if df is None or df.empty:
+        return _np.empty((0,0)), [], [], 0
+
+    hierarchy_cols = _collect_hierarchy_cols(df)
+    if not hierarchy_cols:
+        return _np.empty((0,0)), [], hierarchy_cols, 0
+
+    def get_full_path(row):
+        parts = []
+        for hc in hierarchy_cols:
+            v = row.get(hc)
+            if v is None or str(v).strip().lower() in ["", "nan", "none"]:
+                break
+            parts.append(str(v).strip())
+        return " / ".join(parts)
+
+    full_paths_series = df.apply(get_full_path, axis=1)
+    full_paths = [_p for _p in _pd.Series(full_paths_series).unique() if _p and _p.strip() != ""]
+    if not full_paths:
+        return _np.empty((0, len(hierarchy_cols))), [], hierarchy_cols, int(len(metric_map))
+
+    rows = []
+    for path in full_paths:
+        parts = path.split(" / ")
+        row_vals = []
+        for level_idx in range(len(hierarchy_cols)):
+            if level_idx < len(parts):
+                ancestor_path = " / ".join(parts[: level_idx + 1])
+                row_vals.append(metric_map.get(ancestor_path, _np.nan))
+            else:
+                row_vals.append(_np.nan)
+        rows.append(row_vals)
+
+    matrix = _np.array(rows, dtype=float)
+    return matrix, full_paths, hierarchy_cols, int(len(metric_map))
+
 def heatmap_all_tab_ui(df, default_metric="EBITDA Margin FY25", value_col=None):
     """
     Streamlit UI for the 'Heatmap - all' tab. Metric choices are read from the dataset to avoid
@@ -1107,11 +1149,63 @@ def heatmap_all_tab_ui(df, default_metric="EBITDA Margin FY25", value_col=None):
         st.warning(f"No dataset metric could be matched for the chosen label '{metric_choice}'. The heatmap will likely be empty.")
 
     with st.spinner("Building matrix..."):
-        matrix, row_labels, col_labels, matched_count = build_heatmap_matrix_from_paths(
-            df,
-            metric_name=chosen_dataset_metric if chosen_dataset_metric is not None else metric_choice,
-            value_col=value_col or detected_value_col
-        )
+        # If user requested a margin metric, compute margins exactly as the Dashboard:
+        # use CFG['metrics'] to find revenue & ebitda rows for the requested FY and compute margin.
+        if 'margin' in (metric_choice or '').lower():
+            # detect FY token from the chosen label (default to fy25)
+            m = re.search(r'fy[\s\-]*([0-9]{2,4})', metric_choice, flags=re.I)
+            fy_token = f'fy{m.group(1)}' if m else 'fy25'
+
+            hierarchy_cols = _collect_hierarchy_cols(df)
+
+            def _get_full_path(row):
+                parts = []
+                for hc in hierarchy_cols:
+                    v = row.get(hc)
+                    if v is None or str(v).strip().lower() in ["", "nan", "none"]:
+                        break
+                    parts.append(str(v).strip())
+                return " / ".join(parts)
+
+            full_paths_series = df.apply(_get_full_path, axis=1)
+            full_paths = [_p for _p in _pd.Series(full_paths_series).unique() if _p and _p.strip() != ""]
+
+            metric_map = {}
+            # For each path, subset the dataframe and compute margin from config-driven revenue/ebitda lookups
+            for path in full_paths:
+                parts = [p.strip() for p in path.split(' / ') if p.strip() != '']
+                if not parts:
+                    continue
+                # build mask to select rows that match this path (match provided parts only)
+                mask = _pd.Series(True, index=df.index)
+                for i, part in enumerate(parts):
+                    lvl = hierarchy_cols[i] if i < len(hierarchy_cols) else None
+                    if lvl and lvl in df.columns:
+                        mask = mask & (df[lvl].astype(str).str.strip().str.lower() == str(part).strip().lower())
+                df_node = df.loc[mask].copy() if not mask.empty else _pd.DataFrame()
+
+                # lookup revenue & ebitda using the same CFG-driven labels used by Dashboard
+                rev_map_cfg = CFG.get('metrics', {}).get('revenue', {})
+                ebt_map_cfg = CFG.get('metrics', {}).get('ebitda', {})
+                rev_vals = get_metric_values(df_node, rev_map_cfg) if rev_map_cfg else {'fy23': None, 'fy24': None, 'fy25': None}
+                ebt_vals = get_metric_values(df_node, ebt_map_cfg) if ebt_map_cfg else {'fy23': None, 'fy24': None, 'fy25': None}
+
+                rev_v = rev_vals.get(fy_token)
+                ebt_v = ebt_vals.get(fy_token)
+                try:
+                    val = calculate_ebitda_margin(rev_v, ebt_v) if (rev_v is not None and ebt_v is not None) else None
+                except Exception:
+                    val = None
+                metric_map[path] = val
+
+            # Build matrix from computed metric_map
+            matrix, row_labels, col_labels, matched_count = build_matrix_from_metric_map(metric_map, df)
+        else:
+            matrix, row_labels, col_labels, matched_count = build_heatmap_matrix_from_paths(
+                df,
+                metric_name=chosen_dataset_metric if chosen_dataset_metric is not None else metric_choice,
+                value_col=value_col or detected_value_col
+            )
 
     # Show how many dataset rows matched the metric search (exact or fallback)
     try:
