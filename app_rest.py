@@ -1219,7 +1219,32 @@ def heatmap_all_tab_ui(df, default_metric="EBITDA Margin FY25", value_col=None):
 
     colorscale = st.selectbox("Color scale", options=["RdYlGn", "Viridis", "Blues", "RdBu"], index=0)
     fig = render_heatmap_figure(matrix, row_labels, col_labels, metric_name=chosen_dataset_metric or metric_choice, colorscale=colorscale)
-    st.plotly_chart(fig, use_container_width=True)
+
+    # Make the heatmap area larger by default and optionally resizable by the user.
+    # Default height: at least 800px (approx. double), or scaled by number of rows to avoid clipping.
+    try:
+        default_height = max(800, 32 * len(row_labels)) if row_labels else 800
+    except Exception:
+        default_height = 800
+
+    resize_enabled = st.checkbox("Enable vertical resize for heatmap area (click & drag)", value=True, help="Allow adjusting the visible height of the heatmap by dragging the bottom edge.")
+
+    if resize_enabled:
+        # Embed Plotly HTML inside a CSS-resizable container so users can drag to change height.
+        try:
+            plot_html = pio.to_html(fig, include_plotlyjs="cdn", full_html=False, config={"displayModeBar": False, "responsive": True})
+            wrapper_html = f"""
+            <div style="resize: vertical; overflow: auto; border:1px solid {PANEL_BORDER}; border-radius:6px; padding:6px; height:{default_height}px;">
+                {plot_html}
+            </div>
+            """
+            # components.html height should reflect initial container height; allow scrolling.
+            components.html(wrapper_html, height=default_height, scrolling=True)
+        except Exception:
+            # If embedding fails for any reason, fallback to Streamlit's native renderer.
+            st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.plotly_chart(fig, use_container_width=True)
 
     # Provide CSV download of the matrix (with labels)
     mat_df = _pd.DataFrame(matrix, index=row_labels, columns=col_labels)
