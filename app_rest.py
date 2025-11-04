@@ -1361,7 +1361,7 @@ def heatmap_all_tab_ui(df, default_metric="EBITDA Margin FY25", value_col=None):
         "Blues",
         "RdBu",
     ]
-    sel_cs_label = st.selectbox("Color scale", options=cs_options, index=0)
+    sel_cs_label = st.selectbox("Color scale", options=cs_options, index=1)
     # Map selection to an actual colorscale: our custom list or the plotly named scale string.
     if sel_cs_label == "Blue→Orange→Red (thermal)":
         cs_choice = CUSTOM_THERMAL_COLORSCALE
