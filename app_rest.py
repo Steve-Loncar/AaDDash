@@ -1806,11 +1806,24 @@ with tab_dashboard:
                 except Exception:  
                     pass  
             avg_margin = (sum(margin_list) / len(margin_list)) if margin_list else None  
+
+            # Hybrid composite metric: normalize avg_margin & cagr_rev then blend 70/30
+            try:
+                if cagr_rev is not None and avg_margin is not None:
+                    # normalize to 0..1
+                    nm = max(0.0, min(1.0, (avg_margin / 100.0)))  # margin is percent
+                    nc = max(0.0, min(1.0, cagr_rev))
+                    hybrid_score = 0.7 * nm + 0.3 * nc
+                else:
+                    hybrid_score = None
+            except Exception:
+                hybrid_score = None
+
         except Exception:  
             # non-fatal: keep dashboard working even if KPI calc fails  
             cagr_rev = cagr_ebt = avg_margin = None  
-    
-        try:  
+
+        try:
             # Prepare series for plotting  
             rev_vals = {k: rev.get(k) for k in ('fy23', 'fy24', 'fy25')} if isinstance(rev, dict) else {'fy23': None, 'fy24': None, 'fy25': None}  
             ebt_vals = {k: ebt.get(k) for k in ('fy23', 'fy24', 'fy25')} if isinstance(ebt, dict) else {'fy23': None, 'fy24': None, 'fy25': None}  
