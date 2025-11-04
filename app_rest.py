@@ -1821,7 +1821,7 @@ with tab_dashboard:
 
         except Exception:  
             # non-fatal: keep dashboard working even if KPI calc fails  
-            cagr_rev = cagr_ebt = avg_margin = None  
+            cagr_rev = cagr_ebt = avg_margin = hybrid_score = None  
 
         try:
             # Prepare series for plotting  
