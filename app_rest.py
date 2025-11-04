@@ -1271,20 +1271,38 @@ def heatmap_all_tab_ui(df, default_metric="EBITDA Margin FY25", value_col=None):
         # Let the user pick the initial height (px) quickly, then they can drag to fine-tune.
         initial_height = st.slider("Initial heatmap height (px)", min_value=300, max_value=1200, value=default_height, step=50)
         try:
+            # Ensure the figure has transparent background for embedding (avoid white card in iframe)
+            try:
+                fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+            except Exception:
+                pass
             plot_html = pio.to_html(fig, include_plotlyjs="cdn", full_html=False, config={"displayModeBar": False, "responsive": True})
             # Constrain vertical resize: min-height and max-height (90vh) to avoid absurd tall sizes.
+            # Make wrapper background transparent so the embedded plot doesn't get a white backdrop.
             wrapper_html = f"""
-                <div style="resize: vertical; overflow: auto; border:1px solid {PANEL_BORDER}; border-radius:6px; padding:6px;
-                            height:{initial_height}px; min-height:200px; max-height:90vh;">
-                    {plot_html}
-                </div>
+            <div style="resize: vertical; overflow: auto; border:1px solid {PANEL_BORDER}; border-radius:6px; padding:6px;
+            height:{initial_height}px; min-height:200px; max-height:90vh; background: transparent;">
+            {plot_html}
+            </div>
             """
             # Set the components iframe a bit taller than the initial inner height so the handle is reachable.
             outer_iframe_h = min(1400, initial_height + 120)
             components.html(wrapper_html, height=outer_iframe_h, scrolling=True)
         except Exception:
             # Fallback: Streamlit's native renderer
-            st.plotly_chart(fig, use_container_width=True)
+            try:
+                # Also try to render with transparent layout when falling back
+                try:
+                    fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+                except Exception:
+                    pass
+                st.plotly_chart(fig, use_container_width=True)
+            except Exception:
+                # Last resort: write the figure object so the app doesn't hard-fail.
+                try:
+                    st.write(fig)
+                except Exception:
+                    pass
     else:
         st.plotly_chart(fig, use_container_width=True)
 
