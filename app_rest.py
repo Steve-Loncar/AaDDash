@@ -88,11 +88,20 @@ def show_plotly(fig, height: Optional[int] = None, config: Optional[dict] = None
 
     # Prefer Streamlit's native Plotly renderer (allows width stretching via use_container_width)
     try:
-        # Pass height through if provided — st.plotly_chart accepts height and will render responsively for width.
-        if height:
-            st.plotly_chart(fig, use_container_width=True, height=height, config=cfg)
-        else:
-            st.plotly_chart(fig, use_container_width=True, config=cfg)
+        # Ensure transparent backgrounds so the app theme shows through and we avoid white boxes
+        try:
+            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+        except Exception:
+            pass
+        # Pass explicit height to Streamlit renderer when provided so charts are not vertically squashed.
+        if height is not None:
+            try:
+                st.plotly_chart(fig, use_container_width=True, height=int(height))
+                return
+            except Exception:
+                # Fall back to rendering without height if the call fails for any reason
+                pass
+        st.plotly_chart(fig, use_container_width=True)
         return
     except Exception:
         # Fallback to embedding HTML when native renderer fails in some hosting environments
@@ -1277,26 +1286,33 @@ def heatmap_all_tab_ui(df, default_metric="EBITDA Margin FY25", value_col=None):
             except Exception:
                 pass
             plot_html = pio.to_html(fig, include_plotlyjs="cdn", full_html=False, config={"displayModeBar": False, "responsive": True})
-            # Constrain vertical resize: min-height and max-height (90vh) to avoid absurd tall sizes.
-            # Make wrapper background transparent so the embedded plot doesn't get a white backdrop.
-            wrapper_html = f"""
-            <div style="resize: vertical; overflow: auto; border:1px solid {PANEL_BORDER}; border-radius:6px; padding:6px;
+            # Wrap the generated plot HTML in a wrapper that forces the Plotly container to stretch to 100% height.
+            # Also ensure the wrapper has a transparent background so the app theme shows through.
+            wrapped_plot_html = f"""
+            <style>
+            /* Force the internal plot container to stretch so it matches the wrapper height */
+            .embedded-plotly-wrapper .js-plotly-plot {{
+                height: 100% !important;
+                min-height: 100% !important;
+            }}
+            .embedded-plotly-wrapper {{
+                height: 100%;
+                display: flex;
+            }}
+            </style>
+            <div class="embedded-plotly-wrapper" style="resize: vertical; overflow: auto; border:1px solid {PANEL_BORDER}; border-radius:6px; padding:6px;
             height:{initial_height}px; min-height:200px; max-height:90vh; background: transparent;">
             {plot_html}
             </div>
             """
             # Set the components iframe a bit taller than the initial inner height so the handle is reachable.
-            outer_iframe_h = min(1400, initial_height + 120)
-            components.html(wrapper_html, height=outer_iframe_h, scrolling=True)
+            # Use a larger buffer so the embedded plot isn't clipped and the draggable handle is usable.
+            outer_iframe_h = min(2000, max(700, initial_height + 400))
+            components.html(wrapped_plot_html, height=outer_iframe_h, scrolling=True)
         except Exception:
-            # Fallback: Streamlit's native renderer
+            # Fallback: Streamlit's native renderer with an explicit height so it does not collapse vertically.
             try:
-                # Also try to render with transparent layout when falling back
-                try:
-                    fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
-                except Exception:
-                    pass
-                st.plotly_chart(fig, use_container_width=True)
+                show_plotly(fig, height=initial_height)
             except Exception:
                 # Last resort: write the figure object so the app doesn't hard-fail.
                 try:
@@ -1304,7 +1320,8 @@ def heatmap_all_tab_ui(df, default_metric="EBITDA Margin FY25", value_col=None):
                 except Exception:
                     pass
     else:
-        st.plotly_chart(fig, use_container_width=True)
+        # Non-embedded renderer: request an explicit height to avoid vertical squashing
+        show_plotly(fig, height=default_height)
 
     # Provide CSV download of the matrix (with labels)
     mat_df = _pd.DataFrame(matrix, index=row_labels, columns=col_labels)
