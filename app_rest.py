@@ -1123,6 +1123,7 @@ def heatmap_all_tab_ui(df, default_metric="EBITDA Margin FY25", value_col=None):
         "EBITDA Margin FY25",
         "EBITDA CAGR 23-25",
         "Revenue CAGR 23-25",
+        "Hybrid composite 23-25",
     ]
 
     # Normalization helper for cast-iron matching:
@@ -1252,6 +1253,88 @@ def heatmap_all_tab_ui(df, default_metric="EBITDA Margin FY25", value_col=None):
                 metric_map[path] = val
 
             # Build matrix from computed metric_map
+            matrix, row_labels, col_labels, matched_count = build_matrix_from_metric_map(metric_map, df)
+        # Hybrid composite metric: blend average EBITDA margin (FY23-25) with Revenue CAGR 23-25 (70% margin, 30% cagr)
+        elif 'hybrid' in (metric_choice or '').lower():
+            hierarchy_cols = _collect_hierarchy_cols(df)
+
+            def _get_full_path(row):
+                parts = []
+                for hc in hierarchy_cols:
+                    v = row.get(hc)
+                    if v is None or str(v).strip().lower() in ["", "nan", "none"]:
+                        break
+                    parts.append(str(v).strip())
+                return " / ".join(parts)
+
+            full_paths_series = df.apply(_get_full_path, axis=1)
+            full_paths = [_p for _p in _pd.Series(full_paths_series).unique() if _p and _p.strip() != ""]
+
+            metric_map = {}
+
+            # small helper to compute CAGR between two numeric values (start -> end) over 2 years (23->25)
+            def _compute_cagr(v_start, v_end, years=2):
+                try:
+                    if v_start is None or v_end is None:
+                        return None
+                    vs = float(v_start)
+                    ve = float(v_end)
+                    if vs <= 0:
+                        return None
+                    return (ve / vs) ** (1.0 / years) - 1.0
+                except Exception:
+                    return None
+
+            # For each full-path compute avg margin and revenue cagr, then blend
+            for path in full_paths:
+                parts = [p.strip() for p in path.split(' / ') if p.strip() != '']
+                if not parts:
+                    continue
+                mask = _pd.Series(True, index=df.index)
+                for i, part in enumerate(parts):
+                    lvl = hierarchy_cols[i] if i < len(hierarchy_cols) else None
+                    if lvl and lvl in df.columns:
+                        mask = mask & (df[lvl].astype(str).str.strip().str.lower() == str(part).strip().lower())
+                df_node = df.loc[mask].copy() if not mask.empty else _pd.DataFrame()
+
+                # lookup revenue & ebitda using the same CFG-driven labels used by Dashboard
+                rev_map_cfg = CFG.get('metrics', {}).get('revenue', {})
+                ebt_map_cfg = CFG.get('metrics', {}).get('ebitda', {})
+                rev_vals = get_metric_values(df_node, rev_map_cfg) if rev_map_cfg else {'fy23': None, 'fy24': None, 'fy25': None}
+                ebt_vals = get_metric_values(df_node, ebt_map_cfg) if ebt_map_cfg else {'fy23': None, 'fy24': None, 'fy25': None}
+
+                # compute average EBITDA margin across FY23-FY25 where possible
+                margin_list = []
+                for fy in ('fy23', 'fy24', 'fy25'):
+                    r = rev_vals.get(fy)
+                    e = ebt_vals.get(fy)
+                    try:
+                        if r is not None and e is not None and float(r) != 0:
+                            m = calculate_ebitda_margin(float(r), float(e))
+                            if m is not None:
+                                margin_list.append(m)
+                    except Exception:
+                        pass
+                avg_margin = (sum(margin_list) / len(margin_list)) if margin_list else None
+
+                # compute revenue CAGR 23->25 (do NOT recalculate if a dataset CAGR row exists; but here we compute)
+                try:
+                    cagr_rev = _compute_cagr(rev_vals.get('fy23'), rev_vals.get('fy25'))
+                except Exception:
+                    cagr_rev = None
+
+                try:
+                    if cagr_rev is not None and avg_margin is not None:
+                        # normalize avg_margin (percent) to 0..1 and cagr to 0..1, then blend
+                        nm = max(0.0, min(1.0, (avg_margin / 100.0)))
+                        nc = max(0.0, min(1.0, cagr_rev))
+                        hybrid_score = 0.7 * nm + 0.3 * nc
+                        # store as percent-like number so values are comparable to margins in display
+                        metric_map[path] = hybrid_score * 100.0
+                    else:
+                        metric_map[path] = None
+                except Exception:
+                    metric_map[path] = None
             matrix, row_labels, col_labels, matched_count = build_matrix_from_metric_map(metric_map, df)
         else:
             matrix, row_labels, col_labels, matched_count = build_heatmap_matrix_from_paths(
