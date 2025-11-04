@@ -202,6 +202,19 @@ REV_COLOR = CFG['theme'].get('rev_color', '#4DA3FF')
 EBITDA_COLOR = CFG['theme'].get('ebitda_color', '#7AC8FF')
 MARGIN_COLOR = CFG['theme'].get('margin_color', '#34D399')
 
+# Custom thermal colorscale for heatmaps: deep blue (low) -> yellow -> deep red (high)
+CUSTOM_THERMAL_COLORSCALE = [
+    [0.0, '#08306B'],   # Deep blue
+    [0.2, '#2171B5'],   # Medium blue
+    [0.4, '#6BAED6'],   # Light blue
+    [0.5, '#FFFFCC'],   # Light yellow
+    [0.6, '#FED976'],   # Yellow
+    [0.7, '#FEB24C'],   # Orange
+    [0.8, '#FD8D3C'],   # Light red
+    [0.9, '#E31A1C'],   # Red
+    [1.0, '#800026']    # Deep red
+]
+
 st.markdown(f"""
     <style>
     .stApp {{ background-color: {CANVAS_BG}; color: {PRIMARY}; }}
@@ -994,7 +1007,7 @@ def build_heatmap_matrix_from_paths(df, metric_name="EBITDA margin 2025", value_
     matrix = _np.array(rows, dtype=float)
     return matrix, full_paths, hierarchy_cols, matched_count
 
-def render_heatmap_figure(matrix, row_labels, col_labels, metric_name="Metric", colorscale="RdYlBu_r"):
+def render_heatmap_figure(matrix, row_labels, col_labels, metric_name="Metric", colorscale=None):
     """Render heatmap; uses global min/max across matrix so shading is comparable across levels."""
     fig = _go.Figure()
     if matrix.size == 0 or not _np.isfinite(matrix).any():
@@ -1018,13 +1031,16 @@ def render_heatmap_figure(matrix, row_labels, col_labels, metric_name="Metric", 
             row_hover.append(txt)
         hover_text.append(row_hover)
 
+    # Use custom thermal colorscale if none specified
+    cs = colorscale if colorscale else CUSTOM_THERMAL_COLORSCALE
+    
     fig.add_trace(_go.Heatmap(
         z=z,
         x=col_labels,
         y=row_labels,
         hoverinfo="text",
         text=hover_text,
-        colorscale=colorscale,
+        colorscale=cs,
         zmin=zmin,
         zmax=zmax,
         colorbar=dict(title=metric_name),
@@ -1254,8 +1270,28 @@ def heatmap_all_tab_ui(df, default_metric="EBITDA Margin FY25", value_col=None):
         st.warning(f"No numeric data found for metric '{metric_choice}'. Verify mappings and that a numeric 'Value' column exists (matched rows: {matched_count}).")
         return
 
-    colorscale = st.selectbox("Color scale", options=["RdYlGn", "Viridis", "Blues", "RdBu"], index=0)
-    fig = render_heatmap_figure(matrix, row_labels, col_labels, metric_name=chosen_dataset_metric or metric_choice, colorscale=colorscale)
+    # Present the custom thermal scale first (blue -> orange -> red).
+    cs_options = [
+        "Blue→Orange→Red (thermal)",
+        "RdYlGn",
+        "Viridis",
+        "Blues",
+        "RdBu",
+    ]
+    sel_cs_label = st.selectbox("Color scale", options=cs_options, index=0)
+    # Map selection to an actual colorscale: our custom list or the plotly named scale string.
+    if sel_cs_label == "Blue→Orange→Red (thermal)":
+        cs_choice = CUSTOM_THERMAL_COLORSCALE
+    else:
+        cs_choice = sel_cs_label
+
+    fig = render_heatmap_figure(
+        matrix,
+        row_labels,
+        col_labels,
+        metric_name=chosen_dataset_metric or metric_choice,
+        colorscale=cs_choice,
+    )
 
     try:
         # Sensible default so heatmap isn't enormous by default.
@@ -2689,9 +2725,22 @@ with tab_heatmap:
 
                             annotations = z.apply(lambda col: col.map(fmt_val)).values.tolist()
                             z_plot = z_norm.values.tolist()
-                            # Use a diverging "blue -> yellow -> red" palette so low=blue, high=red (thermal)
-                            colorscale = 'RdYlBu_r'
-                            fig = go.Figure(data=go.Heatmap(z=z_plot, x=z.columns.tolist(), y=z.index.tolist(), text=annotations, hoverinfo='text', colorscale=colorscale, zmin=0, zmax=1, colorbar=dict(title='Relative (col)'), showscale=True))
+                            # Use the custom thermal scale (blue -> orange -> red) for column-normalised heatmap
+                            colorscale = CUSTOM_THERMAL_COLORSCALE
+                            fig = go.Figure(
+                                data=go.Heatmap(
+                                    z=z_plot,
+                                    x=z.columns.tolist(),
+                                    y=z.index.tolist(),
+                                    text=annotations,
+                                    hoverinfo='text',
+                                    colorscale=colorscale,
+                                    zmin=0,
+                                    zmax=1,
+                                    colorbar=dict(title='Relative (col)'),
+                                    showscale=True,
+                                )
+                            )
                             text_annotations = []
                             for yi, row_idx in enumerate(z.index):
                                 for xi, colname in enumerate(z.columns):
