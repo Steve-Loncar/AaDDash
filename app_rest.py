@@ -1220,10 +1220,9 @@ def heatmap_all_tab_ui(df, default_metric="EBITDA Margin FY25", value_col=None):
     colorscale = st.selectbox("Color scale", options=["RdYlGn", "Viridis", "Blues", "RdBu"], index=0)
     fig = render_heatmap_figure(matrix, row_labels, col_labels, metric_name=chosen_dataset_metric or metric_choice, colorscale=colorscale)
 
-    # Make the heatmap area larger by default and optionally resizable by the user.
-    # Default height: at least 800px (approx. double), or scaled by number of rows to avoid clipping.
+    # Make the heatmap area taller by default (vertical priority) and allow optional vertical resize.
+    # Default height: at least 1200px or scaled by number of rows to avoid clipping on long lists.
     try:
-        # Make the heatmap taller by default (at least double) and scale by rows to avoid clipping.
         default_height = max(1200, 48 * len(row_labels)) if row_labels else 1200
     except Exception:
         default_height = 1200
@@ -1234,22 +1233,38 @@ def heatmap_all_tab_ui(df, default_metric="EBITDA Margin FY25", value_col=None):
         help="Allow adjusting the visible height of the heatmap by dragging the bottom edge. Vertical resize only."
     )
 
+    # Ensure the figure uses the app theme colours so both native and embedded renderers inherit dark background.
+    try:
+        fig.update_layout(paper_bgcolor=CANVAS_BG, plot_bgcolor=PANEL_BG, font_color=PRIMARY, height=default_height)
+    except Exception:
+        pass
+
     if resize_enabled:
-        # Embed Plotly HTML inside a CSS-resizable container (vertical-only) so users can drag to change height.
+        # Embed Plotly HTML inside a CSS-resizable container so users can drag to change height.
+        # Add a tiny CSS override so the generated Plotly div inherits our PANEL_BG (prevents white flash).
         try:
             plot_html = pio.to_html(fig, include_plotlyjs="cdn", full_html=False, config={"displayModeBar": False, "responsive": True})
-            wrapper_html = f"""
+            css_override = f"<style>.plotly-graph-div {{ background: {PANEL_BG} !important; box-shadow: none !important; }}</style>"
+            wrapper_html = f"""{css_override}
             <div style="resize: vertical; overflow: auto; border:1px solid {PANEL_BORDER}; border-radius:6px; padding:6px; height:{default_height}px; width:100%; box-sizing:border-box; background:{PANEL_BG};">
                 {plot_html}
             </div>
             """
-            # components.html height should reflect initial container height; allow scrolling inside the resized container.
+            # components.html height should reflect the initial container height; allow scrolling inside the resizable container.
             components.html(wrapper_html, height=default_height, scrolling=True)
         except Exception:
-            # If embedding fails for any reason, fallback to Streamlit's native renderer.
-            st.plotly_chart(fig, use_container_width=True)
+            # If embedding fails for any reason, fallback to Streamlit's native renderer (figure already themed above).
+            try:
+                st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False, "responsive": True})
+            except Exception:
+                # Last-resort: call show_plotly which has additional fallbacks.
+                show_plotly(fig, height=default_height)
     else:
-        st.plotly_chart(fig, use_container_width=True)
+        # When not embedding, render natively but with theming and target height set on the figure.
+        try:
+            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False, "responsive": True})
+        except Exception:
+            show_plotly(fig, height=default_height)
 
     # Provide CSV download of the matrix (with labels)
     mat_df = _pd.DataFrame(matrix, index=row_labels, columns=col_labels)
