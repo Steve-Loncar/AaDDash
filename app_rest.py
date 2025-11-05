@@ -1083,7 +1083,7 @@ def render_heatmap_figure(matrix, row_labels, col_labels, metric_name="Metric", 
             tickfont=dict(color=bright_text)
         ),
         font=dict(color=bright_text),
-        margin=dict(l=120, r=180, t=60, b=60),
+        margin=dict(l=120, r=280, t=60, b=60),  # extra space on right for long labels
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
         title=f"Heatmap - all (metric: {metric_name})",
@@ -1459,8 +1459,15 @@ def heatmap_all_tab_ui(df, default_metric="EBITDA Margin FY25", value_col=None):
     )
 
     if resize_enabled:
-        # Let the user pick the initial height (px) quickly, then they can drag to fine-tune.
-        initial_height = st.slider("Initial heatmap height (px)", min_value=300, max_value=1200, value=default_height, step=50)
+        # Increase default and maximum heatmap height for deep hierarchies (expanded again)
+        initial_height = st.slider(
+            "Initial heatmap height (px)",
+            min_value=400,
+            max_value=8000,   # doubled again for very large datasets
+            value=3200,       # doubled again for default
+            step=100,
+            help="Adjust the vertical height of the heatmap; larger values help with deep hierarchies."
+        )
         try:
             # Ensure the figure uses the requested initial height so Plotly's internal divs get a meaningful size
             try:
