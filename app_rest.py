@@ -1043,13 +1043,42 @@ def render_heatmap_figure(matrix, row_labels, col_labels, metric_name="Metric", 
         colorscale=cs,
         zmin=zmin,
         zmax=zmax,
-        colorbar=dict(title=metric_name),
+        colorbar=dict(
+            title=metric_name,
+            x=-0.1,  # move colorbar to the left side
+            xanchor='left'
+        ),
+        hoverongaps=False
     ))
 
+    # --- Improve dark mode visibility ---
+    bright_text = "#E0E0E0"  # near-white, less harsh than pure white
+
+    # Reverse y-axis so lowest rows (sub-sub-sectors) appear at the bottom,
+    # and flip the label position to the right-hand side
     fig.update_layout(
         autosize=True,
-        yaxis=dict(autorange="reversed"),
-        margin=dict(l=200, r=40, t=60, b=80),
+        yaxis=dict(
+            autorange="reversed",
+            side="right",
+            title="Hierarchy",
+            showticklabels=True,
+            tickfont=dict(color=bright_text),
+            titlefont=dict(color=bright_text),
+        ),
+        xaxis=dict(
+            title="Hierarchy Levels",
+            tickfont=dict(color=bright_text),
+            titlefont=dict(color=bright_text),
+        ),
+        coloraxis_colorbar=dict(
+            titlefont=dict(color=bright_text),
+            tickfont=dict(color=bright_text),
+        ),
+        font=dict(color=bright_text),
+        margin=dict(l=120, r=180, t=60, b=60),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
         title=f"Heatmap - all (metric: {metric_name})",
     )
     return fig
