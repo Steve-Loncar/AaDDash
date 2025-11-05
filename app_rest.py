@@ -1081,6 +1081,19 @@ def build_matrix_from_metric_map(metric_map, df):
     if not full_paths:
         return _np.empty((0, len(hierarchy_cols))), [], hierarchy_cols, int(len(metric_map))
 
+    # Filter metric_map to only include leaf nodes that actually have data
+    # Compute leaf nodes: paths that are not parents of any other path
+    leaf_paths = [p for p in full_paths if not any(q.startswith(p + ' / ') for q in full_paths)]
+    
+    # Filter the metric_map to only those leaves with valid values  
+    filtered_metric_map = {k: v for k, v in metric_map.items() if k in leaf_paths and not _pd.isna(v)}
+    
+    # Update full_paths to only include leaf paths that have data
+    full_paths = [p for p in leaf_paths if p in filtered_metric_map]
+    
+    if not full_paths:
+        return _np.empty((0, len(hierarchy_cols))), [], hierarchy_cols, int(len(filtered_metric_map))
+
     rows = []
     for path in full_paths:
         parts = path.split(" / ")
@@ -1088,13 +1101,14 @@ def build_matrix_from_metric_map(metric_map, df):
         for level_idx in range(len(hierarchy_cols)):
             if level_idx < len(parts):
                 ancestor_path = " / ".join(parts[: level_idx + 1])
-                row_vals.append(metric_map.get(ancestor_path, _np.nan))
+                # Use filtered metric map instead of original
+                row_vals.append(filtered_metric_map.get(ancestor_path, _np.nan))
             else:
                 row_vals.append(_np.nan)
         rows.append(row_vals)
 
     matrix = _np.array(rows, dtype=float)
-    return matrix, full_paths, hierarchy_cols, int(len(metric_map))
+    return matrix, full_paths, hierarchy_cols, int(len(filtered_metric_map))
 
 def heatmap_all_tab_ui(df, default_metric="EBITDA Margin FY25", value_col=None):
     """
