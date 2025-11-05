@@ -1054,6 +1054,15 @@ def render_heatmap_figure(matrix, row_labels, col_labels, metric_name="Metric", 
     # --- Improve dark mode visibility ---
     bright_text = "#E0E0E0"  # near-white, less harsh than pure white
 
+    # --- Dynamically calculate right margin to avoid label clipping ---
+    # Estimate average label length (characters) and assign space accordingly
+    if len(row_labels) > 0:
+        avg_label_len = _np.mean([len(str(y)) for y in row_labels])
+        # Each ~10 characters = ~12px width allowance, capped between 200–600px
+        right_margin = int(min(max(avg_label_len * 12, 200), 600))
+    else:
+        right_margin = 280
+
     # Reverse y-axis so lowest rows (sub-sub-sectors) appear at the bottom,
     # and flip the label position to the right-hand side
     fig.update_layout(
@@ -1083,7 +1092,7 @@ def render_heatmap_figure(matrix, row_labels, col_labels, metric_name="Metric", 
             tickfont=dict(color=bright_text)
         ),
         font=dict(color=bright_text),
-        margin=dict(l=120, r=280, t=60, b=60),  # extra space on right for long labels
+        margin=dict(l=120, r=right_margin, t=60, b=60),
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
         title=f"Heatmap - all (metric: {metric_name})",
@@ -1463,8 +1472,8 @@ def heatmap_all_tab_ui(df, default_metric="EBITDA Margin FY25", value_col=None):
         initial_height = st.slider(
             "Initial heatmap height (px)",
             min_value=400,
-            max_value=8000,   # doubled again for very large datasets
-            value=3200,       # doubled again for default
+            max_value=8000,   # keep large for deep hierarchies
+            value=1800,       # updated default height
             step=100,
             help="Adjust the vertical height of the heatmap; larger values help with deep hierarchies."
         )
