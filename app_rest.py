@@ -1081,15 +1081,28 @@ def build_matrix_from_metric_map(metric_map, df):
     if not full_paths:
         return _np.empty((0, len(hierarchy_cols))), [], hierarchy_cols, int(len(metric_map))
 
-    # Filter metric_map to only include leaf nodes that actually have data
+    # Enhanced leaf node filtering with parent aggregation
     # Compute leaf nodes: paths that are not parents of any other path
     leaf_paths = [p for p in full_paths if not any(q.startswith(p + ' / ') for q in full_paths)]
     
-    # Filter the metric_map to only those leaves with valid values  
-    filtered_metric_map = {k: v for k, v in metric_map.items() if k in leaf_paths and not _pd.isna(v)}
+    # Keep metric values for leaves only
+    leaf_metric_map = {k: v for k, v in metric_map.items() if k in leaf_paths and not _pd.isna(v)}
     
-    # Update full_paths to only include leaf paths that have data
-    full_paths = [p for p in leaf_paths if p in filtered_metric_map]
+    # Aggregate parent values as mean of their children's values
+    parent_metric_map = {}
+    for path in full_paths:
+        if path not in leaf_paths:  # Only process non-leaf nodes
+            children = [k for k in leaf_metric_map.keys() if k.startswith(path + ' / ')]
+            if children:
+                vals = [leaf_metric_map[c] for c in children if not _pd.isna(leaf_metric_map[c])]
+                if len(vals) > 0:
+                    parent_metric_map[path] = sum(vals) / len(vals)
+    
+    # Merge both maps: leaves (with data) + parents (aggregated)  
+    filtered_metric_map = {**leaf_metric_map, **parent_metric_map}
+    
+    # Update full_paths to only include leaf paths that have data (for matrix rows)
+    full_paths = [p for p in leaf_paths if p in leaf_metric_map]
     
     if not full_paths:
         return _np.empty((0, len(hierarchy_cols))), [], hierarchy_cols, int(len(filtered_metric_map))
