@@ -1061,19 +1061,26 @@ def render_heatmap_figure(matrix, row_labels, col_labels, metric_name="Metric", 
         yaxis=dict(
             autorange="reversed",
             side="right",
-            title="Hierarchy",
+            title=dict(
+                text="Hierarchy",
+                font=dict(color=bright_text)
+            ),
             showticklabels=True,
-            tickfont=dict(color=bright_text),
-            titlefont=dict(color=bright_text),
+            tickfont=dict(color=bright_text)
         ),
         xaxis=dict(
-            title="Hierarchy Levels",
-            tickfont=dict(color=bright_text),
-            titlefont=dict(color=bright_text),
+            title=dict(
+                text="Hierarchy Levels",
+                font=dict(color=bright_text)
+            ),
+            tickfont=dict(color=bright_text)
         ),
         coloraxis_colorbar=dict(
-            titlefont=dict(color=bright_text),
-            tickfont=dict(color=bright_text),
+            title=dict(
+                text=metric_name,
+                font=dict(color=bright_text)
+            ),
+            tickfont=dict(color=bright_text)
         ),
         font=dict(color=bright_text),
         margin=dict(l=120, r=180, t=60, b=60),
