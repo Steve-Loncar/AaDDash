@@ -635,6 +635,32 @@ def get_metric_values(df: pd.DataFrame, label_map: Dict[str, str]) -> Dict[str, 
     return out
 
 
+def compute_cagr(vstart, vend, years: int = 2) -> Optional[float]:
+    try:
+        if vstart is None or vend is None:
+            return None
+        vs = float(vstart)
+        ve = float(vend)
+        if vs == 0:
+            return None
+        return (ve / vs) ** (1.0 / years) - 1.0
+    except Exception:
+        return None
+
+
+def compute_cagr(vstart, vend, years: int = 2) -> Optional[float]:
+    try:
+        if vstart is None or vend is None:
+            return None
+        vs = float(vstart)
+        ve = float(vend)
+        if vs == 0:
+            return None
+        return (ve / vs) ** (1.0 / years) - 1.0
+    except Exception:
+        return None
+
+
 def calculate_ebitda_margin(revenue: Optional[float], ebitda: Optional[float]) -> Optional[float]:
     if revenue and ebitda and (revenue > 0):
         return ebitda / revenue * 100.0
@@ -1181,6 +1207,9 @@ def build_matrix_from_metric_map(metric_map, df):
     matrix = _np.array(rows, dtype=float)
     return matrix, full_paths, hierarchy_cols, int(len(filtered_metric_map))
 
+# Alias for consistency with diff naming
+find_metric_and_value_cols = _find_metric_and_value_cols
+
 def heatmap_all_tab_ui(df, default_metric="EBITDA Margin FY25", value_col=None):
     """
     Streamlit UI for the 'Heatmap - all' tab. Metric choices are read from the dataset to avoid
@@ -1189,7 +1218,7 @@ def heatmap_all_tab_ui(df, default_metric="EBITDA Margin FY25", value_col=None):
     st = _st
     st.header("Heatmap - all")
 
-    metric_col, detected_value_col = _find_metric_and_value_cols(df)
+    metric_col, detected_value_col = find_metric_and_value_cols(df)
     if metric_col is None:
         st.warning("Dataset does not contain a 'Fiscal Metric Flattened' column (case-insensitive). Heatmap cannot be built.")
         return
@@ -1281,161 +1310,143 @@ def heatmap_all_tab_ui(df, default_metric="EBITDA Margin FY25", value_col=None):
             chosen_dataset_metric = None
             matched_by = None
 
-    # Show user what dataset metric was matched (helpful for debugging)
-    if chosen_dataset_metric:
-        st.caption(f"Using dataset metric: '{chosen_dataset_metric}' (matched by: {matched_by})")
-    else:
-        st.warning(f"No dataset metric could be matched for the chosen label '{metric_choice}'. The heatmap will likely be empty.")
+    # The metric is now computed from config‑driven revenue/EBITDA, not
+    # directly from Fiscal Metric Flattened, so the caption is purely
+    # informational.
+    st.caption(f"Metric shown: {metric_choice} (Dashboard‑aligned)")
 
     with st.spinner("Building matrix..."):
-        # If user requested a margin metric, compute margins exactly as the Dashboard:
-        # use CFG['metrics'] to find revenue & ebitda rows for the requested FY and compute margin.
-        if 'margin' in (metric_choice or '').lower():
-            # detect FY token from the chosen label (default to fy25)
-            m = re.search(r'fy[\s\-]*([0-9]{2,4})', metric_choice, flags=re.I)
-            fy_token = f'fy{m.group(1)}' if m else 'fy25'
+        # ------------------------------------------------------------------
+        # NEW: unified, Dashboard‑driven metric computation for Heatmap‑all
+        # ------------------------------------------------------------------
+        hierarchy_cols = _collect_hierarchy_cols(df)
 
-            hierarchy_cols = _collect_hierarchy_cols(df)
+        def _get_full_path(row: pd.Series) -> str:
+            parts: List[str] = []
+            for hc in hierarchy_cols:
+                v = row.get(hc)
+                if v is None or str(v).strip().lower() in ("", "nan", "none"):
+                    break
+                parts.append(str(v).strip())
+            return " / ".join(parts)
 
-            def _get_full_path(row):
-                parts = []
-                for hc in hierarchy_cols:
-                    v = row.get(hc)
-                    if v is None or str(v).strip().lower() in ["", "nan", "none"]:
-                        break
-                    parts.append(str(v).strip())
-                return " / ".join(parts)
+        full_paths_series = df.apply(_get_full_path, axis=1)
+        full_paths = [p for p in pd.Series(full_paths_series).unique() if p and p.strip()]
 
-            full_paths_series = df.apply(_get_full_path, axis=1)
-            full_paths = [_p for _p in _pd.Series(full_paths_series).unique() if _p and _p.strip() != ""]
+        MET = CFG.get("metrics", {})
+        rev_map_cfg = MET.get("revenue")
+        ebt_map_cfg = MET.get("ebitda")
 
-            metric_map = {}
-            # For each path, subset the dataframe and compute margin from config-driven revenue/ebitda lookups
-            for path in full_paths:
-                parts = [p.strip() for p in path.split(' / ') if p.strip() != '']
-                if not parts:
-                    continue
-                # build mask to select rows that match this path (match provided parts only)
-                mask = _pd.Series(True, index=df.index)
-                for i, part in enumerate(parts):
-                    lvl = hierarchy_cols[i] if i < len(hierarchy_cols) else None
-                    if lvl and lvl in df.columns:
-                        mask = mask & (df[lvl].astype(str).str.strip().str.lower() == str(part).strip().lower())
-                df_node = df.loc[mask].copy() if not mask.empty else _pd.DataFrame()
+        metric_map: Dict[str, Optional[float]] = {}
 
-                # lookup revenue & ebitda using the same CFG-driven labels used by Dashboard
-                rev_map_cfg = CFG.get('metrics', {}).get('revenue', {})
-                ebt_map_cfg = CFG.get('metrics', {}).get('ebitda', {})
-                rev_vals = get_metric_values(df_node, rev_map_cfg) if rev_map_cfg else {'fy23': None, 'fy24': None, 'fy25': None}
-                ebt_vals = get_metric_values(df_node, ebt_map_cfg) if ebt_map_cfg else {'fy23': None, 'fy24': None, 'fy25': None}
+        for path in full_paths:
+            parts = [p.strip() for p in path.split("/") if p.strip()]
+            if not parts:
+                continue
 
-                rev_v = rev_vals.get(fy_token)
-                ebt_v = ebt_vals.get(fy_token)
+            # build node slice as Dashboard does
+            mask = pd.Series(True, index=df.index)
+            for i, part in enumerate(parts):
+                lvl = hierarchy_cols[i] if i < len(hierarchy_cols) else None
+                if lvl and lvl in df.columns:
+                    mask = mask & (
+                        df[lvl].astype(str).str.strip().str.lower()
+                        == str(part).strip().lower()
+                    )
+            df_node = df.loc[mask].copy() if not mask.empty else pd.DataFrame()
+
+            if df_node.empty or not rev_map_cfg or not ebt_map_cfg:
+                metric_map[path] = None
+                continue
+
+            # same helpers as Dashboard
+            rev_vals = get_metric_values(df_node, rev_map_cfg)
+            ebt_vals = get_metric_values(df_node, ebt_map_cfg)
+
+            # convenience locals
+            rev23, rev24, rev25 = rev_vals.get("fy23"), rev_vals.get("fy24"), rev_vals.get("fy25")
+            ebt23, ebt24, ebt25 = ebt_vals.get("fy23"), ebt_vals.get("fy24"), ebt_vals.get("fy25")
+
+            # compute derived metrics
+            margin_vals: Dict[str, Optional[float]] = {}
+            for fy, r, e in (
+                ("FY23", rev23, ebt23),
+                ("FY24", rev24, ebt24),
+                ("FY25", rev25, ebt25),
+            ):
                 try:
-                    val = calculate_ebitda_margin(rev_v, ebt_v) if (rev_v is not None and ebt_v is not None) else None
+                    margin_vals[fy] = (
+                        calculate_ebitda_margin(r, e)
+                        if r is not None and e is not None
+                        else None
+                    )
                 except Exception:
-                    val = None
-                metric_map[path] = val
+                    margin_vals[fy] = None
 
-            # Build matrix from computed metric_map
-            matrix, row_labels, col_labels, matched_count = build_matrix_from_metric_map(metric_map, df)
-        # Hybrid composite metric: blend average EBITDA margin (FY23-25) with Revenue CAGR 23-25 (70% margin, 30% cagr)
-        elif 'hybrid' in (metric_choice or '').lower():
-            hierarchy_cols = _collect_hierarchy_cols(df)
+            # Avg margin FY23‑25 as Dashboard
+            margin_list = [v for v in margin_vals.values() if v is not None]
+            avg_margin = sum(margin_list) / len(margin_list) if margin_list else None
 
-            def _get_full_path(row):
-                parts = []
-                for hc in hierarchy_cols:
-                    v = row.get(hc)
-                    if v is None or str(v).strip().lower() in ["", "nan", "none"]:
-                        break
-                    parts.append(str(v).strip())
-                return " / ".join(parts)
+            # CAGRs
+            try:
+                rev_cagr = compute_cagr(rev23, rev25)
+            except Exception:
+                rev_cagr = None
+            try:
+                ebt_cagr = compute_cagr(ebt23, ebt25)
+            except Exception:
+                ebt_cagr = None
 
-            full_paths_series = df.apply(_get_full_path, axis=1)
-            full_paths = [_p for _p in _pd.Series(full_paths_series).unique() if _p and _p.strip() != ""]
+            # Map each user‑facing choice to the same value as Dashboard
+            key = metric_choice.lower()
+            val: Optional[float] = None
 
-            metric_map = {}
-
-            # small helper to compute CAGR between two numeric values (start -> end) over 2 years (23->25)
-            def _compute_cagr(v_start, v_end, years=2):
-                # Same helper as used in Dashboard KPIs
-                try:
-                    if v_start is None or v_end is None:
-                        return None
-                    vs = float(v_start)
-                    ve = float(v_end)
-                    if vs <= 0:
-                        return None
-                    return (ve / vs) ** (1.0 / years) - 1.0
-                except Exception:
-                    return None
-
-            # For each full-path compute avg margin and revenue cagr, then blend
-            for path in full_paths:
-                parts = [p.strip() for p in path.split(' / ') if p.strip() != '']
-                if not parts:
-                    continue
-                mask = _pd.Series(True, index=df.index)
-                for i, part in enumerate(parts):
-                    lvl = hierarchy_cols[i] if i < len(hierarchy_cols) else None
-                    if lvl and lvl in df.columns:
-                        mask = mask & (df[lvl].astype(str).str.strip().str.lower() == str(part).strip().lower())
-                df_node = df.loc[mask].copy() if not mask.empty else _pd.DataFrame()
-
-                # lookup revenue & ebitda using the same CFG-driven labels used by Dashboard
-                rev_map_cfg = CFG.get('metrics', {}).get('revenue', {})
-                ebt_map_cfg = CFG.get('metrics', {}).get('ebitda', {})
-                rev_vals = (
-                    get_metric_values(df_node, rev_map_cfg)
-                    if rev_map_cfg
-                    else {'fy23': None, 'fy24': None, 'fy25': None}
-                )
-                ebt_vals = (
-                    get_metric_values(df_node, ebt_map_cfg)
-                    if ebt_map_cfg
-                    else {'fy23': None, 'fy24': None, 'fy25': None}
-                )
-
-                # compute average EBITDA margin across FY23-FY25 where possible
-                margin_list = []
-                for fy in ('fy23', 'fy24', 'fy25'):
-                    r = rev_vals.get(fy)
-                    e = ebt_vals.get(fy)
+            if "revenue cagr" in key:
+                val = rev_cagr * 100.0 if rev_cagr is not None else None
+            elif "ebitda cagr" in key:
+                val = ebt_cagr * 100.0 if ebt_cagr is not None else None
+            elif "ebitda margin fy23" in key:
+                val = margin_vals.get("FY23")
+            elif "ebitda margin fy24" in key:
+                val = margin_vals.get("FY24")
+            elif "ebitda margin fy25" in key:
+                val = margin_vals.get("FY25")
+            elif "ebitda margin" in key and "avg" in key:
+                val = avg_margin
+            elif "ebitda fy23" in key:
+                val = ebt23
+            elif "ebitda fy24" in key:
+                val = ebt24
+            elif "ebitda fy25" in key:
+                val = ebt25
+            elif "revenue fy23" in key:
+                val = rev23
+            elif "revenue fy24" in key:
+                val = rev24
+            elif "revenue fy25" in key:
+                val = rev25
+            elif "hybrid" in key:
+                # same hybrid as Dashboard: 70% avg margin (percent), 30% rev CAGR
+                if rev_cagr is not None and avg_margin is not None:
                     try:
-                        if r is not None and e is not None and float(r) != 0:
-                            m = calculate_ebitda_margin(float(r), float(e))
-                            if m is not None:
-                                margin_list.append(m)
-                    except Exception:
-                        pass
-                avg_margin = (sum(margin_list) / len(margin_list)) if margin_list else None
-
-                # Revenue CAGR 23-25, computed exactly as in Dashboard
-                try:
-                    cagr_rev = _compute_cagr(rev_vals.get('fy23'), rev_vals.get('fy25'))
-                except Exception:
-                    cagr_rev = None
-
-                try:
-                    if cagr_rev is not None and avg_margin is not None:
-                        # normalize avg_margin (percent) to 0..1 and cagr to 0..1, then blend
-                        nm = max(0.0, min(1.0, (avg_margin / 100.0)))
-                        nc = max(0.0, min(1.0, cagr_rev))
+                        nm = max(0.0, min(1.0, avg_margin / 100.0))
+                        nc = max(0.0, min(1.0, rev_cagr))
                         hybrid_score = 0.7 * nm + 0.3 * nc
-                        # store as percent-like number so values are comparable to margins in display
-                        metric_map[path] = hybrid_score * 100.0
-                    else:
-                        metric_map[path] = None
-                except Exception:
-                    metric_map[path] = None
-            matrix, row_labels, col_labels, matched_count = build_matrix_from_metric_map(metric_map, df)
-        else:
-            matrix, row_labels, col_labels, matched_count = build_heatmap_matrix_from_paths(
-                df,
-                metric_name=chosen_dataset_metric if chosen_dataset_metric is not None else metric_choice,
-                value_col=value_col or detected_value_col
-            )
+                        val = hybrid_score * 100.0
+                    except Exception:
+                        val = None
+                else:
+                    val = None
+            else:
+                # fallback: no value
+                val = None
+
+            metric_map[path] = val
+
+        # Build matrix from computed metric_map (one value per path)
+        matrix, row_labels, col_labels, matched_count = build_matrix_from_metric_map(
+            metric_map, df
+        )
 
     # Show how many dataset rows matched the metric search (exact or fallback)
     try:
