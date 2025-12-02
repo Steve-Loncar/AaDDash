@@ -11,6 +11,7 @@ import streamlit.components.v1 as components
 import plotly.graph_objects as go
 import plotly.express as px
 import plotly.io as pio
+from plotly.colors import get_colorscale
 import re
 try:
     from streamlit_tree_select import tree_select
@@ -214,6 +215,24 @@ CUSTOM_THERMAL_COLORSCALE = [
     [0.9, '#E31A1C'],   # Red
     [1.0, '#800026']    # Deep red
 ]
+
+def softened_rdylgn() -> list:
+    """
+    Return an RdYlGn colourscale where strong red/green are
+    confined to ~0–0.1 and ~0.9–1.0 of the range, so most
+    values sit in the softer yellow–orange region.
+    """
+    base = get_colorscale("RdYlGn")
+    out = []
+    for pos, col in base:
+        # Compress 0–1 into [0.1, 0.9]; extremes are reserved
+        # for very low / very high values.
+        new_pos = 0.1 + 0.8 * pos
+        out.append((new_pos, col))
+    # Add soft caps at 0.0 and 1.0 using end colours
+    out.insert(0, (0.0, base[0][1]))
+    out.append((1.0, base[-1][1]))
+    return out
 
 st.markdown(f"""
     <style>
@@ -939,6 +958,42 @@ def _find_metric_and_value_cols(df):
     value_col = next((c for c in cols if isinstance(c, str) and c.strip().lower() == 'value'), None)
     return metric_col, value_col
 
+
+def build_node_paths(df: pd.DataFrame, levels: List[str]) -> List[str]:
+    """Build list of hierarchy paths from the dataframe."""
+    if df is None or df.empty:
+        return []
+    out = []
+    seen = set()
+    for _, r in df[levels].iterrows():
+        parts = []
+        for lvl in levels:
+            val = str(r.get(lvl, '')).strip()
+            if val != '' and val.lower() != 'nan':
+                parts.append(val)
+            else:
+                break
+        if parts:
+            path = ' / '.join(parts)
+            if path not in seen:
+                out.append(path)
+                seen.add(path)
+    return out
+
+
+def subset_for_path(df: pd.DataFrame, path_str: str, levels: List[str]) -> pd.DataFrame:
+    """Filter dataframe to rows matching the given hierarchy path."""
+    parts = [p.strip() for p in path_str.split(" / ") if p.strip()]
+    if not parts:
+        return pd.DataFrame()
+    mask = pd.Series(True, index=df.index)
+    for i, p in enumerate(parts):
+        lvl = levels[i] if i < len(levels) else None
+        if lvl and lvl in df.columns:
+            mask = mask & (df[lvl].astype(str).str.strip().str.lower() == p.strip().lower())
+    return df.loc[mask] if not mask.empty else pd.DataFrame()
+
+
 def build_node_metric_map(df, metric_name, value_col=None):
     """
     Build a mapping from hierarchy-path (string) to numeric metric value for metric_name.
@@ -1323,22 +1378,9 @@ def heatmap_all_tab_ui(df, default_metric="EBITDA Margin FY25", value_col=None):
     st.caption(f"Metric shown: {metric_choice} (Dashboard‑aligned)")
 
     with st.spinner("Building matrix..."):
-        # ------------------------------------------------------------------
-        # NEW: unified, Dashboard‑driven metric computation for Heatmap‑all
-        # ------------------------------------------------------------------
-        hierarchy_cols = _collect_hierarchy_cols(df)
-
-        def _get_full_path(row: pd.Series) -> str:
-            parts: List[str] = []
-            for hc in hierarchy_cols:
-                v = row.get(hc)
-                if v is None or str(v).strip().lower() in ("", "nan", "none"):
-                    break
-                parts.append(str(v).strip())
-            return " / ".join(parts)
-
-        full_paths_series = df.apply(_get_full_path, axis=1)
-        full_paths = [p for p in pd.Series(full_paths_series).unique() if p and p.strip()]
+        # --- Dashboard-aligned metric computation for Heatmap - all ---
+        levels = CFG["hierarchy"]["levels"]
+        nodepaths = build_node_paths(df, levels)
 
         MET = CFG.get("metrics", {})
         rev_map_cfg = MET.get("revenue")
@@ -1346,65 +1388,34 @@ def heatmap_all_tab_ui(df, default_metric="EBITDA Margin FY25", value_col=None):
 
         metric_map: Dict[str, Optional[float]] = {}
 
-        for path in full_paths:
-            parts = [p.strip() for p in path.split("/") if p.strip()]
-            if not parts:
-                continue
-
-            # build node slice as Dashboard does
-            mask = pd.Series(True, index=df.index)
-            for i, part in enumerate(parts):
-                lvl = hierarchy_cols[i] if i < len(hierarchy_cols) else None
-                if lvl and lvl in df.columns:
-                    mask = mask & (
-                        df[lvl].astype(str).str.strip().str.lower()
-                        == str(part).strip().lower()
-                    )
-            df_node = df.loc[mask].copy() if not mask.empty else pd.DataFrame()
-
-            if df_node.empty or not rev_map_cfg or not ebt_map_cfg:
+        for path in nodepaths:
+            df_node = subset_for_path(df, path, levels)
+            if df_node is None or df_node.empty or not rev_map_cfg or not ebt_map_cfg:
                 metric_map[path] = None
                 continue
 
-            # same helpers as Dashboard
+            # Same helpers as Dashboard
             rev_vals = get_metric_values(df_node, rev_map_cfg)
             ebt_vals = get_metric_values(df_node, ebt_map_cfg)
 
-            # convenience locals
             rev23, rev24, rev25 = rev_vals.get("fy23"), rev_vals.get("fy24"), rev_vals.get("fy25")
             ebt23, ebt24, ebt25 = ebt_vals.get("fy23"), ebt_vals.get("fy24"), ebt_vals.get("fy25")
 
-            # compute derived metrics
-            margin_vals: Dict[str, Optional[float]] = {}
-            for fy, r, e in (
-                ("FY23", rev23, ebt23),
-                ("FY24", rev24, ebt24),
-                ("FY25", rev25, ebt25),
-            ):
+            def safe_margin(r, e):
                 try:
-                    margin_vals[fy] = (
-                        calculate_ebitda_margin(r, e)
-                        if r is not None and e is not None
-                        else None
-                    )
+                    return calculate_ebitda_margin(r, e) if r is not None and e is not None else None
                 except Exception:
-                    margin_vals[fy] = None
+                    return None
 
-            # Avg margin FY23‑25 as Dashboard
-            margin_list = [v for v in margin_vals.values() if v is not None]
-            avg_margin = sum(margin_list) / len(margin_list) if margin_list else None
+            m23 = safe_margin(rev23, ebt23)
+            m24 = safe_margin(rev24, ebt24)
+            m25 = safe_margin(rev25, ebt25)
+            margins = [v for v in (m23, m24, m25) if v is not None]
+            avg_margin = sum(margins) / len(margins) if margins else None
 
-            # CAGRs
-            try:
-                rev_cagr = compute_cagr(rev23, rev25)
-            except Exception:
-                rev_cagr = None
-            try:
-                ebt_cagr = compute_cagr(ebt23, ebt25)
-            except Exception:
-                ebt_cagr = None
+            rev_cagr = compute_cagr(rev23, rev25, years=2)
+            ebt_cagr = compute_cagr(ebt23, ebt25, years=2)
 
-            # Map each user‑facing choice to the same value as Dashboard
             key = metric_choice.lower()
             val: Optional[float] = None
 
@@ -1413,11 +1424,11 @@ def heatmap_all_tab_ui(df, default_metric="EBITDA Margin FY25", value_col=None):
             elif "ebitda cagr" in key:
                 val = ebt_cagr * 100.0 if ebt_cagr is not None else None
             elif "ebitda margin fy23" in key:
-                val = margin_vals.get("FY23")
+                val = m23
             elif "ebitda margin fy24" in key:
-                val = margin_vals.get("FY24")
+                val = m24
             elif "ebitda margin fy25" in key:
-                val = margin_vals.get("FY25")
+                val = m25
             elif "ebitda margin" in key and "avg" in key:
                 val = avg_margin
             elif "ebitda fy23" in key:
@@ -1433,24 +1444,19 @@ def heatmap_all_tab_ui(df, default_metric="EBITDA Margin FY25", value_col=None):
             elif "revenue fy25" in key:
                 val = rev25
             elif "hybrid" in key:
-                # same hybrid as Dashboard: 70% avg margin (percent), 30% rev CAGR
-                if rev_cagr is not None and avg_margin is not None:
+                # 70% avg margin (percent), 30% revenue CAGR – same as Dashboard
+                if avg_margin is not None and rev_cagr is not None:
                     try:
                         nm = max(0.0, min(1.0, avg_margin / 100.0))
                         nc = max(0.0, min(1.0, rev_cagr))
-                        hybrid_score = 0.7 * nm + 0.3 * nc
-                        val = hybrid_score * 100.0
+                        val = (0.7 * nm + 0.3 * nc) * 100.0
                     except Exception:
                         val = None
                 else:
                     val = None
-            else:
-                # fallback: no value
-                val = None
 
             metric_map[path] = val
 
-        # Build matrix from computed metric_map (one value per path)
         matrix, row_labels, col_labels, matched_count = build_matrix_from_metric_map(
             metric_map, df
         )
@@ -1468,7 +1474,7 @@ def heatmap_all_tab_ui(df, default_metric="EBITDA Margin FY25", value_col=None):
     # Present the custom thermal scale first (blue -> orange -> red).
     cs_options = [
         "Blue→Orange→Red (thermal)",
-        "RdYlGn",
+        "RdYlGn (soft)",
         "Viridis",
         "Blues",
         "RdBu",
@@ -1477,6 +1483,8 @@ def heatmap_all_tab_ui(df, default_metric="EBITDA Margin FY25", value_col=None):
     # Map selection to an actual colorscale: our custom list or the plotly named scale string.
     if sel_cs_label == "Blue→Orange→Red (thermal)":
         cs_choice = CUSTOM_THERMAL_COLORSCALE
+    elif sel_cs_label == "RdYlGn (soft)":
+        cs_choice = softened_rdylgn()
     else:
         cs_choice = sel_cs_label
 
