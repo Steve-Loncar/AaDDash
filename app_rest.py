@@ -296,16 +296,17 @@ def load_data_file(path: str) -> pd.DataFrame:
 
 
 def get_active_df() -> pd.DataFrame:
-    """Return uploaded dataframe if present, otherwise reload baseline from Excel."""
-    if 'uploaded_df' not in st.session_state:
-        st.session_state.uploaded_df = None
+    """Return uploaded dataframe if present, otherwise reload baseline Excel."""
+    if "uploadeddf" not in st.session_state:
+        st.session_state.uploadeddf = None
 
-    if st.session_state.uploaded_df is not None:
-        return st.session_state.uploaded_df
+    # Uploaded file overrides everything until reset
+    if st.session_state.uploadeddf is not None:
+        return st.session_state.uploadeddf
 
-    # Always reload baseline so updates to the XLSX file are picked up
-    if DEFAULT_DATA_PATH:
-        return load_data_file(DEFAULT_DATA_PATH)
+    # Always reload from DEFAULTDATAPATH so on-disk Excel edits show up
+    if DEFAULTDATAPATH:
+        return loaddata_file(DEFAULTDATAPATH)
     return pd.DataFrame()
 
 
@@ -316,13 +317,18 @@ if os.path.exists(LOCAL_DATA_DEFAULT):
     DEFAULT_DATA_PATH = LOCAL_DATA_DEFAULT
 elif os.path.exists(ALTERNATIVE_DATA):
     DEFAULT_DATA_PATH = ALTERNATIVE_DATA
+
+# Alias for consistency with diff naming
+DEFAULTDATAPATH = DEFAULT_DATA_PATH
+loaddata_file = load_data_file
+
 try:
     df_baseline = load_data_file(DEFAULT_DATA_PATH) if DEFAULT_DATA_PATH else pd.DataFrame()
 except Exception:
     df_baseline = pd.DataFrame()
 
 # session defaults
-st.session_state.setdefault('uploaded_df', None)
+st.session_state.setdefault('uploadeddf', None)
 st.session_state.setdefault('currency_unit', 'Billions')
 st.session_state.setdefault('sel_path', {})
 st.session_state.setdefault('_rerun_trigger', 0)
@@ -1628,7 +1634,7 @@ with tab_home:
 
     # Column 1: Overview & insights (clean typography; avoid harsh colours)
     with col1:
-        st.markdown("<div class='section-title'>BANANA!!!! Introduction & approach</div>", unsafe_allow_html=True)
+        st.markdown("<div class='section-title'>Introduction & approach</div>", unsafe_allow_html=True)
         st.markdown("<div class='body-text'>"
                     "Structured, taxonomy-driven analysis using a multi-tier hierarchy (Total → Main Category → Sector → Subsector → Sub-Sub-Sector). "
                     "Nodes are mutually exclusive slices of commercial recurring revenue (industry contract revenue only). "
