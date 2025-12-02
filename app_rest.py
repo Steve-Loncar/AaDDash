@@ -1346,6 +1346,7 @@ def heatmap_all_tab_ui(df, default_metric="EBITDA Margin FY25", value_col=None):
 
             # small helper to compute CAGR between two numeric values (start -> end) over 2 years (23->25)
             def _compute_cagr(v_start, v_end, years=2):
+                # Same helper as used in Dashboard KPIs
                 try:
                     if v_start is None or v_end is None:
                         return None
@@ -1372,8 +1373,16 @@ def heatmap_all_tab_ui(df, default_metric="EBITDA Margin FY25", value_col=None):
                 # lookup revenue & ebitda using the same CFG-driven labels used by Dashboard
                 rev_map_cfg = CFG.get('metrics', {}).get('revenue', {})
                 ebt_map_cfg = CFG.get('metrics', {}).get('ebitda', {})
-                rev_vals = get_metric_values(df_node, rev_map_cfg) if rev_map_cfg else {'fy23': None, 'fy24': None, 'fy25': None}
-                ebt_vals = get_metric_values(df_node, ebt_map_cfg) if ebt_map_cfg else {'fy23': None, 'fy24': None, 'fy25': None}
+                rev_vals = (
+                    get_metric_values(df_node, rev_map_cfg)
+                    if rev_map_cfg
+                    else {'fy23': None, 'fy24': None, 'fy25': None}
+                )
+                ebt_vals = (
+                    get_metric_values(df_node, ebt_map_cfg)
+                    if ebt_map_cfg
+                    else {'fy23': None, 'fy24': None, 'fy25': None}
+                )
 
                 # compute average EBITDA margin across FY23-FY25 where possible
                 margin_list = []
@@ -1389,7 +1398,7 @@ def heatmap_all_tab_ui(df, default_metric="EBITDA Margin FY25", value_col=None):
                         pass
                 avg_margin = (sum(margin_list) / len(margin_list)) if margin_list else None
 
-                # compute revenue CAGR 23->25 (do NOT recalculate if a dataset CAGR row exists; but here we compute)
+                # Revenue CAGR 23-25, computed exactly as in Dashboard
                 try:
                     cagr_rev = _compute_cagr(rev_vals.get('fy23'), rev_vals.get('fy25'))
                 except Exception:
@@ -2740,6 +2749,8 @@ with tab_heatmap:
         if rev25:
             metric_cols.append(('Revenue FY25', ('revenue', 'fy25')))
         if rev_cagr:
+            # NEW: recompute Revenue CAGR 23‑25 per node using the same
+            # compute_cagr helper used in the Dashboard KPI.
             metric_cols.append(('Revenue CAGR 23-25', ('revenue_cagr', '')))
         if ebt23:
             metric_cols.append(('EBITDA FY23', ('ebitda', 'fy23')))
@@ -2834,25 +2845,52 @@ with tab_heatmap:
                     for node in selected_nodes:
                         df_node = subset_for_path(df_active, node, levels)
                         row = {'__node': node}
+
                         rev_map = MET.get('revenue', {})
                         ebt_map = MET.get('ebitda', {})
-                        rev_vals = get_metric_values(df_node, rev_map) if rev_map else {'fy23': None, 'fy24': None, 'fy25': None}
-                        ebt_vals = get_metric_values(df_node, ebt_map) if ebt_map else {'fy23': None, 'fy24': None, 'fy25': None}
+
+                        rev_vals = (
+                            get_metric_values(df_node, rev_map)
+                            if rev_map
+                            else {'fy23': None, 'fy24': None, 'fy25': None}
+                        )
+                        ebt_vals = (
+                            get_metric_values(df_node, ebt_map)
+                            if ebt_map
+                            else {'fy23': None, 'fy24': None, 'fy25': None}
+                        )
+
+                        # Copy raw revenue / EBITDA values (unchanged behaviour)
                         for fy in ('fy23', 'fy24', 'fy25'):
                             row[f'Revenue {fy.upper()}'] = rev_vals.get(fy)
                             row[f'EBITDA {fy.upper()}'] = ebt_vals.get(fy)
                             rv = rev_vals.get(fy)
                             eb = ebt_vals.get(fy)
                             row[f'EBITDA Margin {fy.upper()}'] = calculate_ebitda_margin(rv, eb) if rv is not None and eb is not None else None
-                        
-                        # Lookup existing CAGR metrics in the node rows (do NOT recalculate)
+
+                        # Compute CAGR helper (same as Dashboard)
+                        def _compute_cagr(v_start, v_end, years=2):
+                            try:
+                                if v_start is None or v_end is None:
+                                    return None
+                                vs = float(v_start)
+                                ve = float(v_end)
+                                if vs <= 0:
+                                    return None
+                                return (ve / vs) ** (1.0 / years) - 1.0
+                            except Exception:
+                                return None
+
+                        # NEW: Revenue CAGR 23‑25 computed exactly as in Dashboard:
+                        # cagrrev = compute_cagr(rev['fy23'], rev['fy25'])
+                        rev_cagr_val = _compute_cagr(rev_vals.get('fy23'), rev_vals.get('fy25'))
+                        # Store as percent so table shows same units as Dashboard KPI
+                        row['Revenue CAGR 23-25'] = rev_cagr_val * 100.0 if rev_cagr_val is not None else None
+
+                        # Lookup existing EBITDA CAGR metrics in the node rows (unchanged)
                         # Detect metric/value column names once per node
                         metric_col_name, detected_value_col = _find_metric_and_value_cols(df_node)
-                        # Revenue CAGR lookup: look for rows whose metric cell contains both 'cagr' and 'revenue'
-                        rev_cagr_val = _lookup_metric_by_keywords(df_node, metric_col_name, detected_value_col, ['cagr', 'revenue'])
                         ebt_cagr_val = _lookup_metric_by_keywords(df_node, metric_col_name, detected_value_col, ['cagr', 'ebitda'])
-                        # Keep the same labels as the UI checkboxes
-                        row['Revenue CAGR 23-25'] = rev_cagr_val
                         row['EBITDA CAGR 23-25'] = ebt_cagr_val
                         rows.append(row)
                     df_heat_raw = pd.DataFrame(rows).set_index('__node')
