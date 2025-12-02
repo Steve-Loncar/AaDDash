@@ -296,10 +296,17 @@ def load_data_file(path: str) -> pd.DataFrame:
 
 
 def get_active_df() -> pd.DataFrame:
-    """Return uploaded dataframe if present, otherwise baseline."""
+    """Return uploaded dataframe if present, otherwise reload baseline from Excel."""
     if 'uploaded_df' not in st.session_state:
         st.session_state.uploaded_df = None
-    return st.session_state.uploaded_df if st.session_state.uploaded_df is not None else globals().get('df_baseline', pd.DataFrame())
+
+    if st.session_state.uploaded_df is not None:
+        return st.session_state.uploaded_df
+
+    # Always reload baseline so updates to the XLSX file are picked up
+    if DEFAULT_DATA_PATH:
+        return load_data_file(DEFAULT_DATA_PATH)
+    return pd.DataFrame()
 
 
 LOCAL_DATA_DEFAULT = 'Aero_and_Defence_Tidy_Data_AIReady.normalized.xlsx'
@@ -1621,7 +1628,7 @@ with tab_home:
 
     # Column 1: Overview & insights (clean typography; avoid harsh colours)
     with col1:
-        st.markdown("<div class='section-title'>Introduction & approach</div>", unsafe_allow_html=True)
+        st.markdown("<div class='section-title'>BANANA!!!! Introduction & approach</div>", unsafe_allow_html=True)
         st.markdown("<div class='body-text'>"
                     "Structured, taxonomy-driven analysis using a multi-tier hierarchy (Total → Main Category → Sector → Subsector → Sub-Sub-Sector). "
                     "Nodes are mutually exclusive slices of commercial recurring revenue (industry contract revenue only). "
