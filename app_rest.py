@@ -1055,8 +1055,15 @@ def render_heatmap_figure(matrix, row_labels, col_labels, metric_name="Metric", 
 
     z = matrix
     finite = _np.isfinite(z)
-    zmin = float(_np.nanmin(_np.where(finite, z, _np.nan)))
-    zmax = float(_np.nanmax(_np.where(finite, z, _np.nan)))
+    vals = _np.where(finite, z, _np.nan)
+    flat = vals[_np.isfinite(vals)]
+    if flat.size:
+        # Use 5th–95th percentile range so one outlier does not make the
+        # whole heatmap look the same colour.
+        zmin = float(_np.percentile(flat, 5))
+        zmax = float(_np.percentile(flat, 95))
+    else:
+        zmin, zmax = 0.0, 1.0
 
     hover_text = []
     for r_idx, rlabel in enumerate(row_labels):
@@ -1473,11 +1480,14 @@ def heatmap_all_tab_ui(df, default_metric="EBITDA Margin FY25", value_col=None):
     else:
         cs_choice = sel_cs_label
 
+    # Use the user-facing choice (e.g. "Hybrid composite 23-25") for
+    # the heatmap title and colorbar, since values now come from our
+    # own metric_map, not directly from a dataset metric row.
     fig = render_heatmap_figure(
         matrix,
         row_labels,
         col_labels,
-        metric_name=chosen_dataset_metric or metric_choice,
+        metric_name=metric_choice,
         colorscale=cs_choice,
     )
 
